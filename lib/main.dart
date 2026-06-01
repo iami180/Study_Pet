@@ -32,36 +32,77 @@ class FocusPetBootstrap extends StatefulWidget {
 
 class _FocusPetBootstrapState extends State<FocusPetBootstrap> {
   final controller = AppController();
+  bool? _lastDarkMode;
 
   @override
   void initState() {
     super.initState();
+    controller.addListener(_onDarkModeMaybeChanged);
     controller.initialize();
+  }
+
+  void _onDarkModeMaybeChanged() {
+    if (!mounted) return;
+    final dark = controller.darkMode;
+    if (_lastDarkMode == dark) return;
+    _lastDarkMode = dark;
+    setState(() {});
   }
 
   @override
   void dispose() {
-    controller.dispose();
+    controller.removeListener(_onDarkModeMaybeChanged);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: controller,
-      builder: (context, _) => MaterialApp(
-        debugShowCheckedModeBanner: false,
-        title: 'FocusPet',
-        themeMode: controller.darkMode ? ThemeMode.dark : ThemeMode.light,
-        theme: buildTheme(Brightness.light),
-        darkTheme: buildTheme(Brightness.dark),
-        home: !controller.ready
-            ? const SplashScreen()
-            : controller.onboarded
-                ? AppShell(controller: controller)
-                : OnboardingScreen(controller: controller),
-      ),
+    _lastDarkMode ??= controller.darkMode;
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'FocusPet',
+      themeMode: controller.darkMode ? ThemeMode.dark : ThemeMode.light,
+      theme: buildTheme(Brightness.light),
+      darkTheme: buildTheme(Brightness.dark),
+      home: _AppGate(controller: controller),
     );
+  }
+}
+
+class _AppGate extends StatefulWidget {
+  const _AppGate({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_AppGate> createState() => _AppGateState();
+}
+
+class _AppGateState extends State<_AppGate> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onControllerChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChanged);
+    super.dispose();
+  }
+
+  void _onControllerChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = widget.controller;
+    if (!controller.ready) return const SplashScreen();
+    if (!controller.onboarded) {
+      return OnboardingScreen(controller: controller);
+    }
+    return AppShell(controller: controller);
   }
 }
 
@@ -800,6 +841,8 @@ class _PetPanel extends StatelessWidget {
                 state: working ? PetState.focused : PetState.happy,
                 size: 94,
                 hat: controller.equipped[ItemCategory.hats],
+                top: controller.equipped[ItemCategory.tops],
+                eyewear: controller.equipped[ItemCategory.eyewear],
                 effect: controller.equipped[ItemCategory.effects]),
             const SizedBox(width: 18),
             Expanded(
@@ -1913,22 +1956,66 @@ class _MistakesTabState extends State<_MistakesTab> {
 
 Future<void> _showMistakeDetail(
     BuildContext context, AppController controller, Mistake mistake) async {
-  final subject = controller.subjectById(mistake.subjectId);
   await showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (sheetContext) => Padding(
+    builder: (sheetContext) => _MistakeDetailSheet(
+      controller: controller,
+      mistake: mistake,
+    ),
+  );
+}
+
+class _MistakeDetailSheet extends StatefulWidget {
+  const _MistakeDetailSheet({
+    required this.controller,
+    required this.mistake,
+  });
+
+  final AppController controller;
+  final Mistake mistake;
+
+  @override
+  State<_MistakeDetailSheet> createState() => _MistakeDetailSheetState();
+}
+
+class _MistakeDetailSheetState extends State<_MistakeDetailSheet> {
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_refresh);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_refresh);
+    super.dispose();
+  }
+
+  void _refresh() {
+    if (mounted) setState(() {});
+  }
+
+  Mistake get mistake {
+    for (final item in widget.controller.mistakes) {
+      if (item.id == widget.mistake.id) return item;
+    }
+    return widget.mistake;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final subject = widget.controller.subjectById(mistake.subjectId);
+    return Padding(
       padding: EdgeInsets.fromLTRB(
-          20, 4, 20, 20 + MediaQuery.of(sheetContext).viewInsets.bottom),
-      child: AnimatedBuilder(
-        animation: controller,
-        builder: (context, _) => SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(mistake.title,
+          20, 4, 20, 20 + MediaQuery.of(context).viewInsets.bottom),
+      child: SingleChildScrollView(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(mistake.title,
                   style: const TextStyle(
                       fontWeight: FontWeight.w900, fontSize: 20)),
               const SizedBox(height: 4),
@@ -1968,25 +2055,24 @@ Future<void> _showMistakeDetail(
               const SizedBox(height: 22),
               if (mistake.isResolved)
                 OutlinedButton.icon(
-                  onPressed: () => controller.reopenMistake(mistake),
+                  onPressed: () => widget.controller.reopenMistake(mistake),
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('Reopen for review'),
                 )
               else
                 FilledButton.icon(
                   onPressed: () async {
-                    await controller.reviewMistake(mistake);
-                    if (sheetContext.mounted) Navigator.pop(sheetContext);
+                    await widget.controller.reviewMistake(mistake);
+                    if (context.mounted) Navigator.pop(context);
                   },
                   icon: const Icon(Icons.check_rounded),
                   label: const Text('Mark reviewed  (+10 XP)'),
                 ),
-            ],
-          ),
+          ],
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _PlanTabHeader extends StatelessWidget {
@@ -3705,6 +3791,8 @@ class _PetHabitat extends StatelessWidget {
                     : PetState.happy,
                 size: 196,
                 hat: controller.equipped[ItemCategory.hats],
+                top: controller.equipped[ItemCategory.tops],
+                eyewear: controller.equipped[ItemCategory.eyewear],
                 effect: controller.equipped[ItemCategory.effects]),
           ],
         ),
@@ -3726,7 +3814,12 @@ class _HabitatPainter extends CustomPainter {
     final floorY = size.height * .8;
     final colors = switch (background) {
       'library' => [const Color(0xFFFFF4D9), const Color(0xFFFFE3B5)],
+      'sunset' => [const Color(0xFFFFE8C8), const Color(0xFFFFB88A)],
+      'forest' => [const Color(0xFFD8F0D4), const Color(0xFF9BCF9A)],
       'space' => [const Color(0xFF152444), const Color(0xFF2C4274)],
+      'neon_city' => [const Color(0xFF1A1038), const Color(0xFF3D1F6E)],
+      'aurora' => [const Color(0xFF102238), const Color(0xFF2D6B8A)],
+      'royal_hall' => [const Color(0xFF2A1F4A), const Color(0xFF5C3E8C)],
       _ => [const Color(0xFFF1F7F3), const Color(0xFFE4F0EC)],
     };
     paint.shader = LinearGradient(
@@ -3753,8 +3846,59 @@ class _HabitatPainter extends CustomPainter {
       canvas.drawCircle(Offset(size.width * .78, size.height * .24),
           (compact ? 7 : 17) * scale, paint);
     }
+    if (background == 'sunset') {
+      paint.color = const Color(0xFFFF8068).withValues(alpha: .35);
+      canvas.drawCircle(
+          Offset(size.width * .72, size.height * .22),
+          (compact ? 10 : 28) * scale,
+          paint);
+    }
+    if (background == 'forest') {
+      paint.color = const Color(0xFF3C9B73).withValues(alpha: .5);
+      canvas.drawOval(
+          Rect.fromLTWH(size.width * .05, size.height * .12, size.width * .35,
+              size.height * .42),
+          paint);
+      canvas.drawOval(
+          Rect.fromLTWH(size.width * .62, size.height * .08, size.width * .32,
+              size.height * .38),
+          paint);
+    }
+    if (background == 'neon_city') {
+      paint.color = const Color(0xFFFF4FD8).withValues(alpha: .55);
+      canvas.drawRect(
+          Rect.fromLTWH(size.width * .12, size.height * .42, size.width * .12,
+              size.height * .28),
+          paint);
+      paint.color = const Color(0xFF4FD8FF).withValues(alpha: .55);
+      canvas.drawRect(
+          Rect.fromLTWH(size.width * .72, size.height * .34, size.width * .14,
+              size.height * .36),
+          paint);
+    }
+    if (background == 'aurora') {
+      paint.shader = LinearGradient(
+        colors: [
+          const Color(0xFF47C3A4).withValues(alpha: .35),
+          const Color(0xFFB388FF).withValues(alpha: .25),
+        ],
+      ).createShader(Rect.fromLTWH(0, 0, size.width, size.height * .55));
+      canvas.drawRect(
+          Rect.fromLTWH(0, size.height * .08, size.width, size.height * .35),
+          paint);
+      paint.shader = null;
+    }
+    if (background == 'royal_hall') {
+      paint.color = const Color(0xFFFFD36A).withValues(alpha: .2);
+      for (var i = 0; i < 4; i++) {
+        canvas.drawRect(
+            Rect.fromLTWH(size.width * (.08 + i * .22), 0, size.width * .04,
+                size.height * .75),
+            paint);
+      }
+    }
 
-    if (background == 'library') {
+    if (background == 'library' || background == 'royal_hall') {
       _drawShelf(canvas, size, paint, size.width * .045, size.height * .18,
           size.width * .2, size.height * .58);
       _drawShelf(canvas, size, paint, size.width * .77, size.height * .14,
@@ -3781,6 +3925,80 @@ class _HabitatPainter extends CustomPainter {
       case 'bookshelf':
         _drawShelf(canvas, size, paint, size.width * .77, size.height * .42,
             size.width * .19, size.height * .4);
+      case 'rug':
+        paint.color = const Color(0xFF7B6FD6).withValues(alpha: .35);
+        canvas.drawOval(
+            Rect.fromCenter(
+                center: Offset(size.width * .5, size.height * .88),
+                width: size.width * .42,
+                height: size.height * .12),
+            paint);
+      case 'poster':
+        paint.color = const Color(0xFFFF8068);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(size.width * .08, size.height * .2, size.width * .14,
+                  size.height * .18),
+              Radius.circular(4 * scale)),
+          paint,
+        );
+        paint.color = Colors.white;
+        canvas.drawRect(
+            Rect.fromLTWH(size.width * .1, size.height * .26, size.width * .1,
+                size.height * .03),
+            paint);
+      case 'calendar':
+        paint.color = const Color(0xFFF5F7FA);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(size.width * .12, size.height * .16, size.width * .12,
+                  size.height * .16),
+              Radius.circular(3 * scale)),
+          paint,
+        );
+        paint.color = Palette.coral;
+        canvas.drawRect(
+            Rect.fromLTWH(size.width * .12, size.height * .16, size.width * .12,
+                size.height * .04),
+            paint);
+      case 'bean_bag':
+        paint.color = const Color(0xFF4E68D8);
+        canvas.drawOval(
+            Rect.fromCenter(
+                center: Offset(size.width * .2, size.height * .84),
+                width: size.width * .22,
+                height: size.height * .14),
+            paint);
+      case 'gaming_chair':
+        paint.color = const Color(0xFF202D4A);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(size.width * .14, size.height * .62, size.width * .14,
+                  size.height * .22),
+              Radius.circular(8 * scale)),
+          paint,
+        );
+        paint.color = const Color(0xFFE24E68);
+        canvas.drawOval(
+            Rect.fromCenter(
+                center: Offset(size.width * .21, size.height * .6),
+                width: size.width * .16,
+                height: size.height * .08),
+            paint);
+      case 'mini_fridge':
+        paint.color = const Color(0xFFE8EEF5);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(size.width * .78, size.height * .58, size.width * .12,
+                  size.height * .24),
+              Radius.circular(4 * scale)),
+          paint,
+        );
+        paint.color = const Color(0xFF6BCBFF);
+        canvas.drawRect(
+            Rect.fromLTWH(size.width * .8, size.height * .66, size.width * .08,
+                size.height * .1),
+            paint);
     }
   }
 
@@ -4352,19 +4570,24 @@ class _ShopScreenState extends State<ShopScreen> {
           const SizedBox(height: 22),
           _SectionHeader(title: 'Customize ${widget.controller.petName}'),
           const SizedBox(height: 12),
-          Row(
-            children: ItemCategory.values
-                .map((category) => Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.only(right: 7),
-                        child: _ShopCategoryButton(
-                          category: category,
-                          selected: selected == category,
-                          onTap: () => setState(() => selected = category),
-                        ),
-                      ),
-                    ))
-                .toList(),
+          SizedBox(
+            height: 74,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: ItemCategory.values.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final category = ItemCategory.values[index];
+                return SizedBox(
+                  width: 88,
+                  child: _ShopCategoryButton(
+                    category: category,
+                    selected: selected == category,
+                    onTap: () => setState(() => selected = category),
+                  ),
+                );
+              },
+            ),
           ),
           const SizedBox(height: 22),
           Row(children: [
@@ -4405,6 +4628,8 @@ class _ShopPreviewCard extends StatelessWidget {
           state: PetState.happy,
           size: 84,
           hat: controller.equipped[ItemCategory.hats],
+          top: controller.equipped[ItemCategory.tops],
+          eyewear: controller.equipped[ItemCategory.eyewear],
           effect: controller.equipped[ItemCategory.effects],
         ),
         const SizedBox(width: 14),
@@ -4501,17 +4726,40 @@ class _ShopCard extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(item.name,
-                      style: const TextStyle(
-                          fontWeight: FontWeight.w800, fontSize: 16)),
+                  Row(children: [
+                    Expanded(
+                      child: Text(item.name,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 16)),
+                    ),
+                    if (item.isLegendary)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 7, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: Palette.amber.withValues(alpha: .18),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color: Palette.amber.withValues(alpha: .5)),
+                        ),
+                        child: const Text('Legendary',
+                            style: TextStyle(
+                                color: Color(0xFFB8860B),
+                                fontSize: 10,
+                                fontWeight: FontWeight.w900)),
+                      ),
+                  ]),
                   const SizedBox(height: 5),
                   Row(children: [
                     const Icon(Icons.monetization_on_rounded,
                         color: Palette.amber, size: 16),
                     const SizedBox(width: 3),
                     Text('${item.price}',
-                        style: const TextStyle(
-                            color: Palette.muted, fontWeight: FontWeight.w700)),
+                        style: TextStyle(
+                            color: item.isLegendary
+                                ? const Color(0xFFB8860B)
+                                : Palette.muted,
+                            fontWeight: FontWeight.w800)),
                   ]),
                 ],
               ),
@@ -4569,6 +4817,14 @@ class _ShopItemPreview extends StatelessWidget {
       return PetIllustration(
           kind: petKind, state: PetState.happy, size: 57, hat: item.id);
     }
+    if (item.category == ItemCategory.tops) {
+      return PetIllustration(
+          kind: petKind, state: PetState.happy, size: 57, top: item.id);
+    }
+    if (item.category == ItemCategory.eyewear) {
+      return PetIllustration(
+          kind: petKind, state: PetState.happy, size: 57, eyewear: item.id);
+    }
     if (item.category == ItemCategory.effects) {
       return PetIllustration(
           kind: petKind, state: PetState.happy, size: 57, effect: item.id);
@@ -4589,6 +4845,8 @@ class _ShopItemPreview extends StatelessWidget {
 
 IconData _categoryIcon(ItemCategory category) => switch (category) {
       ItemCategory.hats => Icons.school_outlined,
+      ItemCategory.tops => Icons.checkroom_outlined,
+      ItemCategory.eyewear => Icons.visibility_outlined,
       ItemCategory.room => Icons.chair_outlined,
       ItemCategory.backgrounds => Icons.wallpaper_outlined,
       ItemCategory.effects => Icons.auto_awesome_outlined,
@@ -4596,6 +4854,8 @@ IconData _categoryIcon(ItemCategory category) => switch (category) {
 
 Color _categoryColor(ItemCategory category) => switch (category) {
       ItemCategory.hats => Palette.amber,
+      ItemCategory.tops => const Color(0xFF7B6FD6),
+      ItemCategory.eyewear => const Color(0xFF3D9FD9),
       ItemCategory.room => Palette.mint,
       ItemCategory.backgrounds => Palette.primary,
       ItemCategory.effects => Palette.coral,
@@ -5063,12 +5323,16 @@ class PetIllustration extends StatefulWidget {
       required this.state,
       required this.size,
       this.hat,
+      this.top,
+      this.eyewear,
       this.effect,
       super.key});
   final PetKind kind;
   final PetState state;
   final double size;
   final String? hat;
+  final String? top;
+  final String? eyewear;
   final String? effect;
 
   @override
@@ -5107,27 +5371,118 @@ class _PetIllustrationState extends State<PetIllustration>
               kind: widget.kind,
               petState: widget.state,
               hat: widget.hat,
+              top: widget.top,
+              eyewear: widget.eyewear,
               effect: widget.effect)),
     );
   }
 }
 
+class _PetLayout {
+  const _PetLayout({
+    required this.eyeLeft,
+    required this.eyeRight,
+    required this.eyeY,
+    required this.eyeRadius,
+    required this.hatBandY,
+    required this.hatCrownY,
+    required this.headCenterX,
+    required this.headCenterY,
+    required this.headRadius,
+    required this.bodyRect,
+    required this.neckRect,
+  });
+
+  final double eyeLeft;
+  final double eyeRight;
+  final double eyeY;
+  final double eyeRadius;
+  final double hatBandY;
+  final double hatCrownY;
+  final double headCenterX;
+  final double headCenterY;
+  final double headRadius;
+  final Rect? bodyRect;
+  final Rect? neckRect;
+
+  double headHalfWidthAt(double y) {
+    if (headRadius <= 0) {
+      return 34;
+    }
+    final dy = y - headCenterY;
+    final span = headRadius * headRadius - dy * dy;
+    return span <= 0 ? 6 : math.sqrt(span);
+  }
+
+  static _PetLayout forKind(PetKind kind) => switch (kind) {
+        PetKind.robot => const _PetLayout(
+              eyeLeft: 45,
+              eyeRight: 75,
+              eyeY: 46,
+              eyeRadius: 4.6,
+              hatBandY: 24,
+              hatCrownY: 16,
+              headCenterX: 60,
+              headCenterY: 48,
+              headRadius: 0,
+              bodyRect: Rect.fromLTWH(31, 58, 58, 38),
+              neckRect: Rect.fromLTWH(40, 52, 40, 10),
+            ),
+        PetKind.bunny => const _PetLayout(
+              eyeLeft: 47,
+              eyeRight: 73,
+              eyeY: 58,
+              eyeRadius: 4.6,
+              hatBandY: 30,
+              hatCrownY: 20,
+              headCenterX: 60,
+              headCenterY: 61,
+              headRadius: 36,
+              bodyRect: null,
+              neckRect: null,
+            ),
+        PetKind.cat => const _PetLayout(
+              eyeLeft: 46,
+              eyeRight: 74,
+              eyeY: 53,
+              eyeRadius: 4.6,
+              hatBandY: 28,
+              hatCrownY: 18,
+              headCenterX: 60,
+              headCenterY: 56,
+              headRadius: 34,
+              bodyRect: null,
+              neckRect: null,
+            ),
+      };
+}
+
 class PetPainter extends CustomPainter {
-  PetPainter(
-      {required this.kind, required this.petState, this.hat, this.effect});
+  PetPainter({
+    required this.kind,
+    required this.petState,
+    this.hat,
+    this.top,
+    this.eyewear,
+    this.effect,
+  });
   final PetKind kind;
   final PetState petState;
   final String? hat;
+  final String? top;
+  final String? eyewear;
   final String? effect;
+
+  _PetLayout get _layout => _PetLayout.forKind(kind);
 
   @override
   void paint(Canvas canvas, Size size) {
-    final scale = size.width / 120;
+    final s = size.width / 120;
     final paint = Paint()..isAntiAlias = true;
     final outline = Paint()
       ..isAntiAlias = true
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 3.2 * scale
+      ..strokeWidth = 3.2 * s
       ..strokeCap = StrokeCap.round
       ..color = Palette.ink;
     final center = Offset(size.width / 2, size.height / 2);
@@ -5149,8 +5504,22 @@ class PetPainter extends CustomPainter {
       case PetKind.cat:
         _cat(canvas, size, paint, outline);
     }
-    _drawHat(canvas, size, paint, outline);
+    _drawTop(canvas, size, paint, outline, _layout);
+    _drawFace(canvas, size, paint, _layout);
+    _drawEyewear(canvas, size, paint, outline, _layout);
+    _drawHat(canvas, size, paint, outline, _layout);
   }
+
+  Path _catSilhouette(double s) => Path()
+    ..moveTo(28 * s, 48 * s)
+    ..lineTo(29 * s, 14 * s)
+    ..lineTo(50 * s, 28 * s)
+    ..quadraticBezierTo(60 * s, 23 * s, 70 * s, 28 * s)
+    ..lineTo(91 * s, 14 * s)
+    ..lineTo(92 * s, 48 * s)
+    ..quadraticBezierTo(96 * s, 84 * s, 60 * s, 94 * s)
+    ..quadraticBezierTo(24 * s, 84 * s, 28 * s, 48 * s)
+    ..close();
 
   void _robot(Canvas canvas, Size size, Paint paint, Paint outline) {
     final s = size.width / 120;
@@ -5167,7 +5536,6 @@ class PetPainter extends CustomPainter {
     paint.color = Palette.amber;
     canvas.drawCircle(Offset(60 * s, 13 * s), 5 * s, paint);
     canvas.drawLine(Offset(60 * s, 18 * s), Offset(60 * s, 22 * s), outline);
-    _face(canvas, size, paint, 45, 75, 46);
   }
 
   void _bunny(Canvas canvas, Size size, Paint paint, Paint outline) {
@@ -5185,30 +5553,21 @@ class PetPainter extends CustomPainter {
     canvas.drawOval(head, outline);
     paint.color = const Color(0xFFFFB5AE);
     canvas.drawCircle(Offset(60 * s, 67 * s), 4 * s, paint);
-    _face(canvas, size, paint, 47, 73, 58);
   }
 
   void _cat(Canvas canvas, Size size, Paint paint, Paint outline) {
     final s = size.width / 120;
     paint.color = const Color(0xFFFFCE71);
-    final path = Path()
-      ..moveTo(28 * s, 48 * s)
-      ..lineTo(29 * s, 14 * s)
-      ..lineTo(50 * s, 28 * s)
-      ..quadraticBezierTo(60 * s, 23 * s, 70 * s, 28 * s)
-      ..lineTo(91 * s, 14 * s)
-      ..lineTo(92 * s, 48 * s)
-      ..quadraticBezierTo(96 * s, 84 * s, 60 * s, 94 * s)
-      ..quadraticBezierTo(24 * s, 84 * s, 28 * s, 48 * s)
-      ..close();
+    final path = _catSilhouette(s);
     canvas.drawPath(path, paint);
     canvas.drawPath(path, outline);
-    _face(canvas, size, paint, 46, 74, 53);
   }
 
-  void _face(Canvas canvas, Size size, Paint paint, double leftX, double rightX,
-      double y) {
+  void _drawFace(Canvas canvas, Size size, Paint paint, _PetLayout layout) {
     final s = size.width / 120;
+    final leftX = layout.eyeLeft;
+    final rightX = layout.eyeRight;
+    final y = layout.eyeY;
     if (petState == PetState.sleepy) {
       final faceOutline = Paint()
         ..color = Palette.ink
@@ -5227,10 +5586,14 @@ class PetPainter extends CustomPainter {
         ..isAntiAlias = true
         ..color = Colors.white.withValues(alpha: .85);
       for (final x in [leftX, rightX]) {
-        canvas.drawCircle(Offset(x * s, y * s), 4.6 * s, eyes);
+        canvas.drawCircle(Offset(x * s, y * s), layout.eyeRadius * s, eyes);
         canvas.drawCircle(
             Offset((x - 1.2) * s, (y - 1.4) * s), 1.35 * s, highlight);
       }
+    }
+    if (kind == PetKind.bunny) {
+      paint.color = const Color(0xFFFFB5AE);
+      canvas.drawCircle(Offset(60 * s, 67 * s), 4 * s, paint);
     }
     final mouth = Paint()
       ..color = Palette.ink
@@ -5246,17 +5609,332 @@ class PetPainter extends CustomPainter {
         mouth);
   }
 
-  void _drawHat(Canvas canvas, Size size, Paint paint, Paint outline) {
+  void _drawTop(
+      Canvas canvas, Size size, Paint paint, Paint outline, _PetLayout layout) {
+    if (top == null) return;
+    final s = size.width / 120;
+    final colors = switch (top) {
+      'basic_tee' => (fill: const Color(0xFF6B8FE8), accent: const Color(0xFF4E68D8)),
+      'striped_polo' => (fill: const Color(0xFF47C3A4), accent: const Color(0xFF2FA88A)),
+      'study_hoodie' => (fill: const Color(0xFF5C6478), accent: const Color(0xFF3D4558)),
+      'varsity_jacket' => (fill: const Color(0xFF2E4A9A), accent: const Color(0xFFFFC24C)),
+      'lab_coat' => (fill: const Color(0xFFF5F7FA), accent: const Color(0xFFD0D8E4)),
+      'hero_cape' => (fill: const Color(0xFFE24E68), accent: const Color(0xFFFFC24C)),
+      'golden_robe' => (fill: const Color(0xFFFFD36A), accent: const Color(0xFFE6A820)),
+      _ => (fill: const Color(0xFF6B8FE8), accent: const Color(0xFF4E68D8)),
+    };
+    paint.color = colors.fill;
+    paint.style = PaintingStyle.fill;
+
+    if (kind == PetKind.robot && layout.bodyRect != null) {
+      final body = layout.bodyRect!;
+      final shirt = RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          (body.left + 2) * s,
+          (body.top + 2) * s,
+          (body.width - 4) * s,
+          (body.height - 4) * s,
+        ),
+        Radius.circular(15 * s),
+      );
+      canvas.drawRRect(shirt, paint);
+      final shirtOutline = Paint()
+        ..isAntiAlias = true
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.2 * s
+        ..color = colors.accent.withValues(alpha: .65);
+      canvas.drawRRect(shirt, shirtOutline);
+      if (layout.neckRect != null) {
+        paint.color = colors.accent;
+        final neck = layout.neckRect!;
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(neck.left * s, neck.top * s, neck.width * s, neck.height * s),
+            Radius.circular(4 * s),
+          ),
+          paint,
+        );
+      }
+      if (top == 'striped_polo') {
+        paint.color = colors.accent;
+        for (var i = 0; i < 4; i++) {
+          canvas.drawRect(
+            Rect.fromLTWH((body.left + 7 + i * 12) * s, (body.top + 6) * s, 4 * s,
+                (body.height - 10) * s),
+            paint,
+          );
+        }
+      }
+      if (top == 'study_hoodie') {
+        paint.color = colors.accent;
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(26 * s, 20 * s, 68 * s, 36 * s),
+            Radius.circular(16 * s),
+          ),
+          Paint()
+            ..color = colors.fill.withValues(alpha: .92)
+            ..style = PaintingStyle.fill,
+        );
+        canvas.drawArc(
+          Rect.fromCenter(center: Offset(60 * s, 34 * s), width: 50 * s, height: 28 * s),
+          math.pi,
+          math.pi,
+          false,
+          shirtOutline..strokeWidth = 3 * s,
+        );
+      }
+      if (top == 'hero_cape' || top == 'golden_robe') {
+        paint.color = colors.accent.withValues(alpha: .92);
+        canvas.drawPath(
+          Path()
+            ..moveTo((body.left - 6) * s, (body.top + 2) * s)
+            ..quadraticBezierTo(14 * s, 88 * s, 60 * s, 94 * s)
+            ..quadraticBezierTo(106 * s, 88 * s, (body.right + 6) * s, (body.top + 2) * s)
+            ..lineTo((body.right + 2) * s, (body.top + 10) * s)
+            ..lineTo((body.left - 2) * s, (body.top + 10) * s)
+            ..close(),
+          paint,
+        );
+      }
+      return;
+    }
+
+    canvas.save();
+    if (kind == PetKind.bunny) {
+      canvas.clipPath(Path()
+        ..addOval(Rect.fromCircle(
+          center: Offset(layout.headCenterX * s, layout.headCenterY * s),
+          radius: layout.headRadius * s,
+        )));
+    } else if (kind == PetKind.cat) {
+      canvas.clipPath(_catSilhouette(s));
+    }
+
+    final chestTop = kind == PetKind.bunny ? 66.0 : 62.0;
+    final half = layout.headHalfWidthAt(chestTop + 8) - 4;
+    final bib = Path()
+      ..moveTo((layout.headCenterX - half) * s, chestTop * s)
+      ..quadraticBezierTo(
+        (layout.headCenterX - half - 2) * s,
+        (chestTop + 22) * s,
+        layout.headCenterX * s,
+        (chestTop + 28) * s,
+      )
+      ..quadraticBezierTo(
+        (layout.headCenterX + half + 2) * s,
+        (chestTop + 22) * s,
+        (layout.headCenterX + half) * s,
+        chestTop * s,
+      )
+      ..close();
+    canvas.drawPath(bib, paint);
+    canvas.drawPath(
+      bib,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2 * s
+        ..color = colors.accent.withValues(alpha: .55),
+    );
+
+    if (top == 'striped_polo') {
+      paint.color = colors.accent;
+      for (var i = -1; i <= 1; i++) {
+        canvas.drawRect(
+          Rect.fromCenter(
+            center: Offset((layout.headCenterX + i * 9) * s, (chestTop + 14) * s),
+            width: 4 * s,
+            height: 18 * s,
+          ),
+          paint,
+        );
+      }
+    }
+    if (top == 'study_hoodie') {
+      paint.color = colors.fill.withValues(alpha: .95);
+      final hood = Path()
+        ..addArc(
+          Rect.fromCircle(
+            center: Offset(layout.headCenterX * s, layout.headCenterY * s),
+            radius: (layout.headRadius + 2) * s,
+          ),
+          math.pi * 1.05,
+          math.pi * 0.9,
+        );
+      canvas.drawPath(hood, paint);
+      paint.color = colors.accent;
+      canvas.drawArc(
+        Rect.fromCircle(
+          center: Offset(layout.headCenterX * s, (layout.headCenterY - 6) * s),
+          radius: (layout.headRadius - 4) * s,
+        ),
+        math.pi * 1.08,
+        math.pi * 0.84,
+        false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 3.5 * s
+          ..color = colors.accent,
+      );
+    }
+    canvas.restore();
+
+    if (top == 'hero_cape' || top == 'golden_robe') {
+      paint.color = colors.accent.withValues(alpha: .88);
+      final capeY = kind == PetKind.bunny ? 64.0 : 60.0;
+      canvas.drawPath(
+        Path()
+          ..moveTo((layout.headCenterX - 28) * s, capeY * s)
+          ..quadraticBezierTo(10 * s, 102 * s, layout.headCenterX * s, 100 * s)
+          ..quadraticBezierTo(
+              110 * s, 102 * s, (layout.headCenterX + 28) * s, capeY * s)
+          ..lineTo((layout.headCenterX + 20) * s, (capeY + 6) * s)
+          ..lineTo((layout.headCenterX - 20) * s, (capeY + 6) * s)
+          ..close(),
+        paint,
+      );
+    }
+  }
+
+  void _drawEyewear(
+      Canvas canvas, Size size, Paint paint, Paint outline, _PetLayout layout) {
+    if (eyewear == null || petState == PetState.sleepy) return;
+    final s = size.width / 120;
+    final leftX = layout.eyeLeft;
+    final rightX = layout.eyeRight;
+    final eyeY = layout.eyeY;
+    final lensR = layout.eyeRadius + 3.2;
+    final bridgeY = eyeY + 0.4;
+    final lens = Paint()
+      ..isAntiAlias = true
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2 * s
+      ..color = Palette.ink;
+    switch (eyewear) {
+      case 'round_glasses':
+        lens.color = const Color(0xFF354666);
+        for (final x in [leftX, rightX]) {
+          canvas.drawCircle(Offset(x * s, eyeY * s), lensR * s, lens);
+        }
+        canvas.drawLine(
+          Offset((leftX + 2) * s, bridgeY * s),
+          Offset((rightX - 2) * s, bridgeY * s),
+          lens..strokeWidth = 1.6 * s,
+        );
+        lens.strokeWidth = 1.4 * s;
+        canvas.drawLine(
+            Offset((leftX - lensR - 1) * s, eyeY * s), Offset((leftX - lensR - 7) * s, (eyeY - 1) * s), lens);
+        canvas.drawLine(
+            Offset((rightX + lensR + 1) * s, eyeY * s), Offset((rightX + lensR + 7) * s, (eyeY - 1) * s), lens);
+      case 'sunglasses':
+        paint.style = PaintingStyle.fill;
+        paint.color = const Color(0xFF1A2233);
+        for (final x in [leftX, rightX]) {
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromCenter(
+                center: Offset(x * s, eyeY * s),
+                width: (lensR * 2 + 2) * s,
+                height: (lensR * 1.3) * s,
+              ),
+              Radius.circular(lensR * .45 * s),
+            ),
+            paint,
+          );
+        }
+        canvas.drawRect(
+          Rect.fromCenter(
+            center: Offset(layout.headCenterX * s, bridgeY * s),
+            width: (rightX - leftX - lensR * 2 + 4) * s,
+            height: 2.5 * s,
+          ),
+          paint,
+        );
+      case 'heart_shades':
+        paint.style = PaintingStyle.fill;
+        paint.color = const Color(0xFFE85D7A);
+        for (final x in [leftX, rightX]) {
+          canvas.drawPath(
+            Path()
+              ..moveTo(x * s, (eyeY + 1) * s)
+              ..cubicTo((x - 4.5) * s, (eyeY - 4) * s, (x - 4.5) * s, (eyeY + 3) * s,
+                  x * s, (eyeY + 6) * s)
+              ..cubicTo((x + 4.5) * s, (eyeY + 3) * s, (x + 4.5) * s, (eyeY - 4) * s,
+                  x * s, (eyeY + 1) * s),
+            paint,
+          );
+        }
+      case 'star_shades':
+        paint.style = PaintingStyle.fill;
+        paint.color = const Color(0xFFFFC24C);
+        for (final x in [leftX, rightX]) {
+          _drawStar(canvas, Offset(x * s, eyeY * s), lensR * s, paint);
+        }
+      case 'monocle':
+        lens.color = const Color(0xFFC9A227);
+        lens.strokeWidth = 2.2 * s;
+        canvas.drawCircle(Offset(rightX * s, eyeY * s), lensR * s, lens);
+        canvas.drawLine(
+          Offset((rightX + lensR) * s, (eyeY - 1) * s),
+          Offset((rightX + lensR + 8) * s, (eyeY - 10) * s),
+          lens,
+        );
+      case 'diamond_glasses':
+        paint.style = PaintingStyle.fill;
+        paint.shader = LinearGradient(
+          colors: const [
+            Color(0xFF9BE7FF),
+            Color(0xFFE8B4FF),
+            Color(0xFFFFD36A),
+          ],
+        ).createShader(Rect.fromLTWH(34 * s, (eyeY - 8) * s, 52 * s, 16 * s));
+        for (final x in [leftX, rightX]) {
+          canvas.drawRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromCenter(
+                center: Offset(x * s, eyeY * s),
+                width: (lensR * 2) * s,
+                height: (lensR * 1.15) * s,
+              ),
+              Radius.circular(2.5 * s),
+            ),
+            paint,
+          );
+        }
+        paint.shader = null;
+        canvas.drawLine(
+          Offset((leftX + 2) * s, bridgeY * s),
+          Offset((rightX - 2) * s, bridgeY * s),
+          lens..color = const Color(0xFFFFE08A)..strokeWidth = 1.8 * s,
+        );
+    }
+  }
+
+  void _drawStar(Canvas canvas, Offset center, double radius, Paint paint) {
+    final path = Path();
+    for (var i = 0; i < 5; i++) {
+      final angle = -math.pi / 2 + i * 4 * math.pi / 5;
+      final point = center + Offset(math.cos(angle), math.sin(angle)) * radius;
+      if (i == 0) {
+        path.moveTo(point.dx, point.dy);
+      } else {
+        path.lineTo(point.dx, point.dy);
+      }
+    }
+    path.close();
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawHat(
+      Canvas canvas, Size size, Paint paint, Paint outline, _PetLayout layout) {
     if (hat == null) return;
     final s = size.width / 120;
-    // `top` is tuned per pet so a cap's brim rests on the head crown instead of
-    // floating. The bunny's tall central ears mean its hats sit higher so they
-    // perch on the head with the ear tips poking out above.
-    final top = switch (kind) {
-      PetKind.bunny => 16.0,
-      PetKind.cat => 16.0,
-      PetKind.robot => 12.0,
-    };
+    final cx = layout.headCenterX;
+    final bandY = layout.hatBandY;
+    final crownY = layout.hatCrownY;
+    final bandHalf = layout.headHalfWidthAt(bandY);
+    final brimHalf = layout.headHalfWidthAt(bandY + 6) + 4;
+
     if (hat == 'blue_cap') {
       final capOutline = Paint()
         ..isAntiAlias = true
@@ -5264,77 +5942,202 @@ class PetPainter extends CustomPainter {
         ..strokeWidth = 2.2 * s
         ..color = const Color(0xFF253A82);
       final crown = Path()
-        ..moveTo(37 * s, (top + 12) * s)
-        ..quadraticBezierTo(39 * s, top * s, 58 * s, (top - 2) * s)
-        ..quadraticBezierTo(77 * s, top * s, 79 * s, (top + 12) * s)
+        ..moveTo((cx - bandHalf + 4) * s, (bandY + 8) * s)
+        ..quadraticBezierTo(
+            (cx - bandHalf + 6) * s, crownY * s, cx * s, (crownY - 2) * s)
+        ..quadraticBezierTo(
+            (cx + bandHalf - 6) * s, crownY * s, (cx + bandHalf - 4) * s, (bandY + 8) * s)
         ..close();
+      paint.style = PaintingStyle.fill;
       paint.color = const Color(0xFF5276EA);
       canvas.drawPath(crown, paint);
       canvas.drawPath(crown, capOutline);
-      paint.color = const Color(0xFF7192F4);
-      canvas.drawPath(
-          Path()
-            ..moveTo(44 * s, (top + 7) * s)
-            ..quadraticBezierTo(47 * s, (top + 1) * s, 61 * s, top * s),
-          Paint()
-            ..isAntiAlias = true
-            ..color = const Color(0xFF9BB3FF)
-            ..style = PaintingStyle.stroke
-            ..strokeWidth = 1.5 * s);
       final brim = RRect.fromRectAndRadius(
-          Rect.fromLTWH(30 * s, (top + 11) * s, 59 * s, 6 * s),
-          Radius.circular(3 * s));
+        Rect.fromCenter(
+          center: Offset(cx * s, (bandY + 9) * s),
+          width: brimHalf * 2 * s,
+          height: 5.5 * s,
+        ),
+        Radius.circular(3 * s),
+      );
       paint.color = const Color(0xFF3558C7);
       canvas.drawRRect(brim, paint);
       canvas.drawRRect(brim, capOutline);
+    } else if (hat == 'beanie') {
+      paint.style = PaintingStyle.fill;
+      if (layout.headRadius > 0) {
+        final headRect = Rect.fromCircle(
+          center: Offset(cx * s, layout.headCenterY * s),
+          radius: layout.headRadius * s,
+        );
+        paint.color = const Color(0xFFE24E68);
+        canvas.drawArc(headRect, math.pi * 1.02, math.pi * 0.96, true, paint);
+        canvas.drawArc(
+          headRect,
+          math.pi * 1.02,
+          math.pi * 0.96,
+          true,
+          outline..style = PaintingStyle.stroke..strokeWidth = 2.5 * s,
+        );
+      } else {
+        paint.color = const Color(0xFFE24E68);
+        canvas.drawRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromCenter(
+              center: Offset(cx * s, (crownY + 6) * s),
+              width: bandHalf * 2.1 * s,
+              height: (bandY - crownY + 14) * s,
+            ),
+            Radius.circular((bandY - crownY + 8) * s),
+          ),
+          paint,
+        );
+      }
+      paint.color = const Color(0xFFFFB5C2);
+      canvas.drawCircle(Offset((cx + bandHalf * .35) * s, (crownY + 2) * s), 4 * s, paint);
+    } else if (hat == 'party_hat') {
+      paint.color = const Color(0xFF7B6FD6);
+      final cone = Path()
+        ..moveTo(cx * s, (crownY - 14) * s)
+        ..lineTo((cx - bandHalf + 6) * s, (bandY + 6) * s)
+        ..lineTo((cx + bandHalf - 6) * s, (bandY + 6) * s)
+        ..close();
+      canvas.drawPath(cone, paint);
+      canvas.drawPath(cone, outline);
+      paint.color = const Color(0xFFFF8068);
+      canvas.drawCircle(Offset(cx * s, (crownY - 16) * s), 3.5 * s, paint);
+    } else if (hat == 'sun_hat') {
+      paint.color = const Color(0xFFF4D58D);
+      canvas.drawOval(
+        Rect.fromCenter(
+          center: Offset(cx * s, (bandY + 12) * s),
+          width: brimHalf * 2.3 * s,
+          height: 10 * s,
+        ),
+        paint,
+      );
+      paint.color = const Color(0xFFFFE8A8);
+      if (layout.headRadius > 0) {
+        canvas.drawArc(
+          Rect.fromCircle(
+            center: Offset(cx * s, layout.headCenterY * s),
+            radius: (layout.headRadius - 2) * s,
+          ),
+          math.pi * 1.05,
+          math.pi * 0.9,
+          true,
+          paint,
+        );
+      } else {
+        canvas.drawCircle(Offset(cx * s, (crownY + 6) * s), bandHalf * .75 * s, paint);
+      }
+      paint.color = const Color(0xFFE85D7A);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(cx * s, (bandY + 14) * s),
+            width: bandHalf * 1.6 * s,
+            height: 7 * s,
+          ),
+          Radius.circular(4 * s),
+        ),
+        paint,
+      );
+    } else if (hat == 'wizard_hat') {
+      paint.color = const Color(0xFF4E3D8C);
+      final cone = Path()
+        ..moveTo(cx * s, (crownY - 22) * s)
+        ..lineTo((cx - bandHalf + 2) * s, (bandY + 8) * s)
+        ..lineTo((cx + bandHalf - 2) * s, (bandY + 8) * s)
+        ..close();
+      canvas.drawPath(cone, paint);
+      canvas.drawPath(cone, outline);
+      paint.color = const Color(0xFFFFD36A);
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(
+            center: Offset(cx * s, (bandY + 6) * s),
+            width: bandHalf * 1.5 * s,
+            height: 6 * s,
+          ),
+          Radius.circular(3 * s),
+        ),
+        paint,
+      );
+    } else if (hat == 'crown') {
+      paint.color = const Color(0xFFFFD36A);
+      final band = RRect.fromRectAndRadius(
+        Rect.fromCenter(
+          center: Offset(cx * s, (bandY + 4) * s),
+          width: bandHalf * 1.35 * s,
+          height: 10 * s,
+        ),
+        Radius.circular(3 * s),
+      );
+      canvas.drawRRect(band, paint);
+      canvas.drawRRect(band, outline);
+      final spikeSpan = bandHalf * 1.1 / 2;
+      for (var i = -2; i <= 2; i++) {
+        final x = cx + i * (spikeSpan / 2);
+        canvas.drawPath(
+          Path()
+            ..moveTo(x * s, (bandY + 2) * s)
+            ..lineTo((x + 3) * s, (bandY - 8) * s)
+            ..lineTo((x + 6) * s, (bandY + 2) * s)
+            ..close(),
+          paint,
+        );
+      }
+      paint.color = const Color(0xFFFF8068);
+      canvas.drawCircle(Offset(cx * s, (bandY - 4) * s), 3.5 * s, paint);
     } else if (hat == 'grad_cap') {
-      final capY = top + 5;
+      final capY = bandY + 4;
       paint.color = const Color(0xFF202D4A);
       final cap = Path()
-        ..moveTo(29 * s, capY * s)
-        ..lineTo(60 * s, (capY - 13) * s)
-        ..lineTo(91 * s, capY * s)
-        ..lineTo(60 * s, (capY + 13) * s)
+        ..moveTo((cx - brimHalf + 2) * s, capY * s)
+        ..lineTo(cx * s, (capY - 11) * s)
+        ..lineTo((cx + brimHalf - 2) * s, capY * s)
+        ..lineTo(cx * s, (capY + 10) * s)
         ..close();
       canvas.drawPath(cap, paint);
-      paint.color = const Color(0xFF394B70);
-      canvas.drawPath(
-          Path()
-            ..moveTo(42 * s, (capY + 6) * s)
-            ..quadraticBezierTo(60 * s, (capY + 15) * s, 78 * s, (capY + 6) * s)
-            ..lineTo(77 * s, (capY + 14) * s)
-            ..quadraticBezierTo(
-                60 * s, (capY + 22) * s, 43 * s, (capY + 14) * s)
-            ..close(),
-          paint);
       final tassel = Paint()
         ..color = Palette.amber
         ..strokeWidth = 1.8 * s
         ..strokeCap = StrokeCap.round;
       canvas.drawLine(
-          Offset(82 * s, capY * s), Offset(84 * s, (capY + 24) * s), tassel);
-      canvas.drawCircle(Offset(84 * s, (capY + 26) * s), 2.8 * s, tassel);
+        Offset((cx + bandHalf - 4) * s, capY * s),
+        Offset((cx + bandHalf - 2) * s, (capY + 20) * s),
+        tassel,
+      );
+      canvas.drawCircle(Offset((cx + bandHalf - 2) * s, (capY + 22) * s), 2.5 * s, tassel);
     } else if (hat == 'headphones') {
-      final centerY = kind == PetKind.bunny ? 48.0 : 40.0;
+      final arcCenterY = kind == PetKind.bunny ? layout.headCenterY - 10 : bandY + 14;
+      final arcW = layout.headRadius > 0 ? layout.headRadius * 2.1 : 74.0;
+      final arcH = layout.headRadius > 0 ? layout.headRadius * 1.85 : 62.0;
       final headset = Paint()
         ..color = const Color(0xFF314775)
-        ..strokeWidth = 5.5 * s
+        ..strokeWidth = 5 * s
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round;
       canvas.drawArc(
-          Rect.fromCenter(
-              center: Offset(60 * s, centerY * s),
-              width: 76 * s,
-              height: 69 * s),
-          math.pi,
-          math.pi,
-          false,
-          headset);
-      for (final x in [24.0, 86.0]) {
+        Rect.fromCenter(
+          center: Offset(cx * s, arcCenterY * s),
+          width: arcW * s,
+          height: arcH * s,
+        ),
+        math.pi * 1.02,
+        math.pi * 0.96,
+        false,
+        headset,
+      );
+      final cupY = arcCenterY + (kind == PetKind.robot ? 8 : 12);
+      for (final x in [cx - arcW / 2 + 4, cx + arcW / 2 - 16]) {
         final cup = RRect.fromRectAndRadius(
-            Rect.fromLTWH(x * s, (centerY + 4) * s, 12 * s, 23 * s),
-            Radius.circular(6 * s));
+          Rect.fromLTWH(x * s, cupY * s, 12 * s, 20 * s),
+          Radius.circular(6 * s),
+        );
         paint.color = const Color(0xFF5276EA);
+        paint.style = PaintingStyle.fill;
         canvas.drawRRect(cup, paint);
         canvas.drawRRect(cup, headset);
       }
@@ -5343,6 +6146,103 @@ class PetPainter extends CustomPainter {
 
   void _drawEffect(Canvas canvas, Size size, Paint paint) {
     final s = size.width / 120;
+    if (effect == 'hearts') {
+      paint.color = const Color(0xFFE85D7A);
+      for (final point in const [
+        [20.0, 36.0],
+        [98.0, 42.0],
+        [24.0, 82.0],
+        [100.0, 78.0],
+      ]) {
+        canvas.drawCircle(Offset(point[0] * s, point[1] * s), 3.5 * s, paint);
+      }
+      return;
+    }
+    if (effect == 'fireflies') {
+      paint.color = const Color(0xFF9BE87A);
+      for (final point in const [
+        [16.0, 40.0],
+        [104.0, 35.0],
+        [22.0, 70.0],
+        [94.0, 88.0],
+        [48.0, 24.0],
+      ]) {
+        canvas.drawCircle(Offset(point[0] * s, point[1] * s), 2.8 * s, paint);
+        paint.color = const Color(0xFFE8FF9B).withValues(alpha: .7);
+        canvas.drawCircle(Offset(point[0] * s, point[1] * s), 5.5 * s, paint);
+        paint.color = const Color(0xFF9BE87A);
+      }
+      return;
+    }
+    if (effect == 'lightning') {
+      final bolt = Paint()
+        ..color = const Color(0xFFFFE566)
+        ..style = PaintingStyle.fill;
+      canvas.drawPath(
+          Path()
+            ..moveTo(18 * s, 28 * s)
+            ..lineTo(28 * s, 28 * s)
+            ..lineTo(22 * s, 48 * s)
+            ..lineTo(32 * s, 48 * s)
+            ..lineTo(14 * s, 72 * s)
+            ..lineTo(20 * s, 52 * s)
+            ..lineTo(12 * s, 52 * s)
+            ..close(),
+          bolt);
+      return;
+    }
+    if (effect == 'halo') {
+      final halo = Paint()
+        ..color = const Color(0xFFFFD36A).withValues(alpha: .75)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3.5 * s;
+      canvas.drawArc(
+          Rect.fromCenter(
+              center: Offset(60 * s, 18 * s), width: 52 * s, height: 18 * s),
+          math.pi,
+          math.pi,
+          false,
+          halo);
+      return;
+    }
+    if (effect == 'rainbow') {
+      const colors = [
+        Color(0xFFFF6B6B),
+        Color(0xFFFFC24C),
+        Color(0xFF9BE87A),
+        Color(0xFF6BCBFF),
+        Color(0xFFB388FF),
+      ];
+      for (var i = 0; i < colors.length; i++) {
+        paint.color = colors[i].withValues(alpha: .35);
+        canvas.drawArc(
+            Rect.fromCenter(
+                center: Offset(60 * s, 96 * s),
+                width: (90 - i * 8) * s,
+                height: (48 - i * 4) * s),
+            math.pi,
+            math.pi,
+            false,
+            paint..style = PaintingStyle.stroke..strokeWidth = 4 * s);
+        paint.style = PaintingStyle.fill;
+      }
+      return;
+    }
+    if (effect == 'galaxy') {
+      paint.color = const Color(0xFFB388FF).withValues(alpha: .25);
+      canvas.drawCircle(Offset(60 * s, 60 * s), 52 * s, paint);
+      for (final point in const [
+        [22.0, 30.0],
+        [96.0, 38.0],
+        [30.0, 88.0],
+        [88.0, 80.0],
+        [60.0, 20.0],
+      ]) {
+        paint.color = Colors.white.withValues(alpha: .85);
+        canvas.drawCircle(Offset(point[0] * s, point[1] * s), 2.2 * s, paint);
+      }
+      return;
+    }
     if (effect == 'rain') {
       final rain = Paint()
         ..isAntiAlias = true
@@ -5391,5 +6291,7 @@ class PetPainter extends CustomPainter {
       oldDelegate.kind != kind ||
       oldDelegate.petState != petState ||
       oldDelegate.hat != hat ||
+      oldDelegate.top != top ||
+      oldDelegate.eyewear != eyewear ||
       oldDelegate.effect != effect;
 }

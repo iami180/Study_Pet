@@ -50,6 +50,8 @@ class AppController extends ChangeNotifier {
   final Set<String> purchasedItems = {'starter_desk'};
   final Map<ItemCategory, String?> equipped = {
     ItemCategory.hats: null,
+    ItemCategory.tops: null,
+    ItemCategory.eyewear: null,
     ItemCategory.room: null,
     ItemCategory.backgrounds: null,
     ItemCategory.effects: null,
