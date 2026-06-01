@@ -309,6 +309,24 @@ class SessionReward {
   final int coins;
 }
 
+class ProfileInfo {
+  const ProfileInfo({
+    required this.id,
+    required this.userName,
+    required this.petName,
+    required this.petKind,
+    required this.level,
+    required this.active,
+  });
+
+  final String id;
+  final String userName;
+  final String petName;
+  final PetKind petKind;
+  final int level;
+  final bool active;
+}
+
 SessionReward calculateReward(int minutes, FocusMode mode) {
   final baseXp = switch (minutes) {
     15 => 15,

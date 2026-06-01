@@ -9,7 +9,18 @@ import '../domain/models.dart';
 import '../services/notification_service.dart';
 
 class AppController extends ChangeNotifier {
-  static const _storageKey = 'focuspet_progress_v1';
+  // The first profile keeps the original key so existing players' data is
+  // preserved when the multi-profile feature is introduced. Extra profiles use
+  // a suffixed key.
+  static const _legacyStorageKey = 'focuspet_progress_v1';
+  static const _metaKey = 'focuspet_meta_v1';
+
+  String activeProfileId = 'default';
+  List<String> _profileIds = ['default'];
+
+  String _storageKeyFor(String id) =>
+      id == 'default' ? _legacyStorageKey : 'focuspet_progress_v1__$id';
+  String get _storageKey => _storageKeyFor(activeProfileId);
 
   SharedPreferences? _prefs;
   bool ready = false;
@@ -97,6 +108,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
+    _readMeta();
     final raw = _prefs!.getString(_storageKey);
     if (raw != null) _readJson(jsonDecode(raw) as Map<String, dynamic>);
     _seedSubjectsIfNeeded();
@@ -118,6 +130,157 @@ class AppController extends ChangeNotifier {
     petKind = choice;
     onboarded = true;
     await _saveAndNotify();
+  }
+
+  // ---- Profiles ------------------------------------------------------------
+
+  int get profileCount => _profileIds.length;
+
+  void _readMeta() {
+    final raw = _prefs?.getString(_metaKey);
+    if (raw == null) {
+      // First launch under the multi-profile scheme. Any existing data is the
+      // default profile.
+      activeProfileId = 'default';
+      _profileIds = ['default'];
+      _saveMeta();
+      return;
+    }
+    final json = jsonDecode(raw) as Map<String, dynamic>;
+    _profileIds =
+        ((json['profiles'] as List<dynamic>?)?.cast<String>()) ?? ['default'];
+    if (_profileIds.isEmpty) _profileIds = ['default'];
+    activeProfileId = (json['activeProfileId'] as String?) ?? 'default';
+    if (!_profileIds.contains(activeProfileId)) {
+      activeProfileId = _profileIds.first;
+    }
+  }
+
+  void _saveMeta() {
+    _prefs?.setString(
+        _metaKey,
+        jsonEncode({
+          'activeProfileId': activeProfileId,
+          'profiles': _profileIds,
+        }));
+  }
+
+  // Snapshot of every saved profile for the switcher UI.
+  List<ProfileInfo> listProfiles() {
+    return _profileIds.map((id) {
+      if (id == activeProfileId) {
+        return ProfileInfo(
+          id: id,
+          userName: userName,
+          petName: petName,
+          petKind: petKind,
+          level: level,
+          active: true,
+        );
+      }
+      final raw = _prefs?.getString(_storageKeyFor(id));
+      if (raw == null) {
+        return ProfileInfo(
+          id: id,
+          userName: 'Player',
+          petName: 'Buddy',
+          petKind: PetKind.robot,
+          level: 1,
+          active: false,
+        );
+      }
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      final xp = (json['totalXp'] as int?) ?? 0;
+      return ProfileInfo(
+        id: id,
+        userName: (json['userName'] as String?) ?? 'Player',
+        petName: (json['petName'] as String?) ?? 'Buddy',
+        petKind: PetKind.values.byName((json['petKind'] as String?) ?? 'robot'),
+        level: xp ~/ 120 + 1,
+        active: false,
+      );
+    }).toList();
+  }
+
+  // Reset every in-memory field to a clean slate so loading another profile
+  // can never leak data from the previous one.
+  void _loadDefaults() {
+    onboarded = false;
+    darkMode = false;
+    notificationsEnabled = false;
+    vibrationEnabled = true;
+    reminderHour = 18;
+    reminderMinute = 0;
+    dailyGoalMinutes = 60;
+    streakFreezesUsedThisWeek = 0;
+    freezesWeekKey = null;
+    userName = 'Marci';
+    petName = 'Lumi';
+    petKind = PetKind.robot;
+    totalXp = 0;
+    coins = 25;
+    currentStreak = 0;
+    longestStreak = 0;
+    lastFocusDate = null;
+    lastFedAt = null;
+    activeSession = null;
+    sessions.clear();
+    subjects.clear();
+    tasks.clear();
+    exams.clear();
+    mistakes.clear();
+    purchasedItems
+      ..clear()
+      ..add('starter_desk');
+    equipped.updateAll((_, __) => null);
+    claimedQuestKeys.clear();
+    claimedWeeklyGoalKeys.clear();
+    skippedPlanKeys.clear();
+  }
+
+  Future<void> createProfile({
+    required String userName,
+    required String petName,
+    required PetKind petKind,
+  }) async {
+    // Persist the current profile before switching away from it.
+    await _prefs?.setString(_storageKey, jsonEncode(_toJson()));
+    final id = 'profile_${DateTime.now().microsecondsSinceEpoch}';
+    _profileIds.add(id);
+    activeProfileId = id;
+    _loadDefaults();
+    onboarded = true;
+    this.userName = userName.trim().isEmpty ? 'Player' : userName.trim();
+    this.petName = petName.trim().isEmpty ? 'Buddy' : petName.trim();
+    this.petKind = petKind;
+    _seedSubjectsIfNeeded();
+    await _prefs?.setString(_storageKey, jsonEncode(_toJson()));
+    _saveMeta();
+    notifyListeners();
+  }
+
+  Future<void> switchProfile(String id) async {
+    if (id == activeProfileId || !_profileIds.contains(id)) return;
+    // Save the current profile, then load the selected one.
+    await _prefs?.setString(_storageKey, jsonEncode(_toJson()));
+    activeProfileId = id;
+    _loadDefaults();
+    final raw = _prefs?.getString(_storageKey);
+    if (raw != null) _readJson(jsonDecode(raw) as Map<String, dynamic>);
+    _seedSubjectsIfNeeded();
+    _expireStreakIfNeeded();
+    _saveMeta();
+    notifyListeners();
+  }
+
+  Future<bool> deleteProfile(String id) async {
+    // Never delete the active profile or the last remaining one.
+    if (_profileIds.length <= 1 || id == activeProfileId) return false;
+    _profileIds.remove(id);
+    await _prefs?.remove(_storageKeyFor(id));
+    _saveMeta();
+    notifyListeners();
+    return true;
   }
 
   // A stable placeholder returned when a session/task/exam references a subject

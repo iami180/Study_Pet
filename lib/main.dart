@@ -4645,6 +4645,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: const TextStyle(fontWeight: FontWeight.w800)),
             onTap: () => _editUserName(context),
           ),
+          const _SettingsHeader('Characters'),
+          ...controller.listProfiles().map((profile) => ListTile(
+                leading: SizedBox(
+                  width: 42,
+                  height: 42,
+                  child: PetIllustration(
+                      kind: profile.petKind,
+                      state: PetState.happy,
+                      size: 42),
+                ),
+                title: Text(profile.petName,
+                    style: const TextStyle(fontWeight: FontWeight.w800)),
+                subtitle: Text('${profile.userName} - Level ${profile.level}'),
+                trailing: profile.active
+                    ? const Icon(Icons.check_circle, color: Palette.mint)
+                    : (controller.profileCount > 1
+                        ? IconButton(
+                            tooltip: 'Delete character',
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () =>
+                                _confirmDeleteProfile(context, profile),
+                          )
+                        : null),
+                onTap: profile.active
+                    ? null
+                    : () async {
+                        await controller.switchProfile(profile.id);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                              content: Text(
+                                  'Switched to ${profile.petName}.')));
+                        }
+                      },
+              )),
+          ListTile(
+            leading: const Icon(Icons.person_add_alt_1_outlined),
+            title: const Text('New character'),
+            subtitle: const Text('Start a fresh pet and progress'),
+            onTap: () => _newProfile(context),
+          ),
           const _SettingsHeader('Goals'),
           ListTile(
             leading: const Icon(Icons.flag_outlined),
@@ -4794,6 +4834,122 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (name != null && name.isNotEmpty) {
       await controller.updateUserName(name);
     }
+  }
+
+  Future<void> _newProfile(BuildContext context) async {
+    final userName = TextEditingController();
+    final petName = TextEditingController();
+    var kind = PetKind.robot;
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: const Text('New character'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                controller: userName,
+                textCapitalization: TextCapitalization.words,
+                maxLength: 20,
+                decoration: const InputDecoration(
+                    labelText: 'Your name', counterText: ''),
+              ),
+              TextField(
+                controller: petName,
+                textCapitalization: TextCapitalization.words,
+                maxLength: 16,
+                decoration: const InputDecoration(
+                    labelText: 'Pet name', counterText: ''),
+              ),
+              const SizedBox(height: 16),
+              const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Choose your buddy',
+                      style: TextStyle(fontWeight: FontWeight.w800))),
+              const SizedBox(height: 10),
+              Row(
+                children: PetKind.values.map((pet) {
+                  final active = pet == kind;
+                  return Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => setLocal(() => kind = pet),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          decoration: BoxDecoration(
+                            border: Border.all(
+                                color: active
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(context)
+                                        .colorScheme
+                                        .outlineVariant,
+                                width: active ? 2 : 1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(children: [
+                            PetIllustration(
+                                kind: pet, state: PetState.happy, size: 48),
+                            const SizedBox(height: 6),
+                            Text(pet.label,
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w700, fontSize: 12)),
+                          ]),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Create')),
+          ],
+        ),
+      ),
+    );
+    final newUserName = userName.text;
+    final newPetName = petName.text;
+    userName.dispose();
+    petName.dispose();
+    if (created != true) return;
+    await controller.createProfile(
+        userName: newUserName, petName: newPetName, petKind: kind);
+    if (context.mounted) {
+      // Return to the main app so the new character is front and centre.
+      Navigator.of(context).pop();
+    }
+  }
+
+  Future<void> _confirmDeleteProfile(
+      BuildContext context, ProfileInfo profile) async {
+    final delete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete character?'),
+        content: Text(
+            'Remove ${profile.petName} and all of its progress? This cannot be undone.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Keep')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (delete == true) await controller.deleteProfile(profile.id);
   }
 
   Future<void> _confirmReset(BuildContext context) async {
@@ -5093,10 +5249,13 @@ class PetPainter extends CustomPainter {
   void _drawHat(Canvas canvas, Size size, Paint paint, Paint outline) {
     if (hat == null) return;
     final s = size.width / 120;
+    // `top` is tuned per pet so a cap's brim rests on the head crown instead of
+    // floating. The bunny's tall central ears mean its hats sit higher so they
+    // perch on the head with the ear tips poking out above.
     final top = switch (kind) {
-      PetKind.bunny => 28.0,
-      PetKind.cat => 17.0,
-      PetKind.robot => 13.0,
+      PetKind.bunny => 16.0,
+      PetKind.cat => 16.0,
+      PetKind.robot => 12.0,
     };
     if (hat == 'blue_cap') {
       final capOutline = Paint()
