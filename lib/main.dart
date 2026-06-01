@@ -187,12 +187,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     ),
   ];
   final pageController = PageController();
+  final nameController = TextEditingController();
   int page = 0;
   PetKind selectedPet = PetKind.robot;
 
   @override
   void dispose() {
     pageController.dispose();
+    nameController.dispose();
     super.dispose();
   }
 
@@ -217,6 +219,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                 child: selectingPet
                     ? _PetSelection(
                         selected: selectedPet,
+                        nameController: nameController,
                         onSelected: (pet) => setState(() => selectedPet = pet),
                       )
                     : PageView.builder(
@@ -252,6 +255,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               FilledButton(
                 onPressed: () async {
                   if (selectingPet) {
+                    final entered = nameController.text.trim();
+                    if (entered.isNotEmpty) {
+                      await widget.controller.updateUserName(entered);
+                    }
                     await widget.controller.finishOnboarding(selectedPet);
                   } else if (page == pages.length - 1) {
                     setState(() => page = pages.length);
@@ -314,25 +321,48 @@ class _IntroPage extends StatelessWidget {
 }
 
 class _PetSelection extends StatelessWidget {
-  const _PetSelection({required this.selected, required this.onSelected});
+  const _PetSelection({
+    required this.selected,
+    required this.onSelected,
+    required this.nameController,
+  });
 
   final PetKind selected;
   final ValueChanged<PetKind> onSelected;
+  final TextEditingController nameController;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text('Choose your study buddy',
-            style: Theme.of(context)
-                .textTheme
-                .headlineSmall
-                ?.copyWith(fontWeight: FontWeight.w900)),
-        const SizedBox(height: 8),
-        const Text('You can change their accessories later.',
-            style: TextStyle(color: Palette.muted)),
-        const SizedBox(height: 28),
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const SizedBox(height: 16),
+          Text('What should we call you?',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 10),
+          TextField(
+            controller: nameController,
+            textCapitalization: TextCapitalization.words,
+            maxLength: 20,
+            decoration: const InputDecoration(
+              hintText: 'Your name (optional)',
+              counterText: '',
+            ),
+          ),
+          const SizedBox(height: 24),
+          Text('Choose your study buddy',
+              style: Theme.of(context)
+                  .textTheme
+                  .headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w900)),
+          const SizedBox(height: 8),
+          const Text('You can change their accessories later.',
+              style: TextStyle(color: Palette.muted)),
+          const SizedBox(height: 28),
         Row(
           children: PetKind.values.map((pet) {
             final active = pet == selected;
@@ -375,7 +405,8 @@ class _PetSelection extends StatelessWidget {
             );
           }).toList(),
         ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -696,7 +727,9 @@ class _PetPanel extends StatelessWidget {
         ? '${controller.petName} is focusing with you.'
         : controller.todaySessionCount > 0
             ? '${controller.petName} is proud of today\'s work.'
-            : 'Complete one session to start your streak.';
+            : controller.currentStreak > 0
+                ? 'Keep your ${controller.currentStreak}-day streak alive!'
+                : 'Complete one session to start your streak.';
     return Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
@@ -1104,13 +1137,21 @@ class _PlanScreenState extends State<PlanScreen> {
   }
 }
 
-class _TasksTab extends StatelessWidget {
+class _TasksTab extends StatefulWidget {
   const _TasksTab({required this.controller, required this.onStartTask});
   final AppController controller;
   final ValueChanged<StudyTask> onStartTask;
 
   @override
+  State<_TasksTab> createState() => _TasksTabState();
+}
+
+class _TasksTabState extends State<_TasksTab> {
+  bool showAllDone = false;
+
+  @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final open = controller.tasks
         .where((task) => task.status != TaskStatus.done)
         .toList()
@@ -1122,7 +1163,12 @@ class _TasksTab extends StatelessWidget {
       });
     final done = controller.tasks
         .where((task) => task.status == TaskStatus.done)
-        .toList();
+        .toList()
+      ..sort((a, b) => (b.completedAt ?? b.createdAt)
+          .compareTo(a.completedAt ?? a.createdAt));
+    const collapsedCount = 5;
+    final visibleDone =
+        showAllDone || done.length <= collapsedCount ? done : done.take(collapsedCount).toList();
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 4, 20, 26),
       children: [
@@ -1145,13 +1191,23 @@ class _TasksTab extends StatelessWidget {
         ...open.map((task) => _TaskTile(
             controller: controller,
             task: task,
-            onStart: () => onStartTask(task))),
+            onStart: () => widget.onStartTask(task))),
         if (done.isNotEmpty) ...[
           const SizedBox(height: 18),
-          const Text('Completed',
-              style: TextStyle(fontWeight: FontWeight.w900, fontSize: 17)),
+          Row(children: [
+            Expanded(
+              child: Text('Completed (${done.length})',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w900, fontSize: 17)),
+            ),
+            if (done.length > collapsedCount)
+              TextButton(
+                onPressed: () => setState(() => showAllDone = !showAllDone),
+                child: Text(showAllDone ? 'Show less' : 'See all'),
+              ),
+          ]),
           const SizedBox(height: 8),
-          ...done.take(5).map((task) =>
+          ...visibleDone.map((task) =>
               _TaskTile(controller: controller, task: task, onStart: null)),
         ],
       ],
@@ -1229,7 +1285,15 @@ class _TaskTile extends StatelessWidget {
               child: OutlinedButton.icon(
                 onPressed: task.status == TaskStatus.done
                     ? null
-                    : () => controller.markTaskDone(task),
+                    : () async {
+                        await controller.markTaskDone(task);
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(
+                              'Task done. +${task.examId == null ? 20 : 30} XP, +5 coins'),
+                          duration: const Duration(seconds: 2),
+                        ));
+                      },
                 icon: const Icon(Icons.check_rounded),
                 label:
                     Text(task.status == TaskStatus.done ? 'Done' : 'Mark done'),
@@ -2831,7 +2895,7 @@ class _ActiveFocusScreenState extends State<ActiveFocusScreen> {
                       const SizedBox(height: 14),
                       Text(
                         active.isPaused
-                            ? 'Paused - ${3 - active.pauseCount} pauses remaining today.'
+                            ? 'Paused - ${3 - active.pauseCount} pauses left this session.'
                             : '${widget.controller.petName} is focusing too.',
                         style:
                             const TextStyle(color: Palette.muted, fontSize: 16),
@@ -3196,13 +3260,16 @@ class PetScreen extends StatelessWidget {
             Expanded(
               child: OutlinedButton.icon(
                 onPressed: () async {
+                  final wasReady = controller.canFeedPet;
                   final fed = await controller.feedPet();
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                        content: Text(fed
-                            ? '${controller.petName} enjoyed a snack. -10 coins'
-                            : 'You need 10 coins to feed ${controller.petName}.')));
-                  }
+                  if (!context.mounted) return;
+                  final message = fed
+                      ? '${controller.petName} enjoyed a snack. -10 coins, +5 XP'
+                      : !wasReady && controller.coins >= 10
+                          ? '${controller.petName} is full. Try again later.'
+                          : 'You need 10 coins to feed ${controller.petName}.';
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(SnackBar(content: Text(message)));
                 },
                 icon: const Icon(Icons.restaurant_outlined),
                 label: const Text('Feed'),

@@ -147,6 +147,15 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> cancelSession() async {
+    final session = activeSession;
+    if (session != null) {
+      final task = taskById(session.taskId);
+      // If we set the task to inProgress when starting and the user never
+      // completed it, revert to todo so it isn't stuck "In progress" forever.
+      if (task != null && task.status == TaskStatus.inProgress) {
+        task.status = TaskStatus.todo;
+      }
+    }
     activeSession = null;
     await _saveAndNotify();
     _runNotification(NotificationService.instance.cancelSessionComplete());
@@ -257,7 +266,11 @@ class AppController extends ChangeNotifier {
   Map<String, int> get subjectMinutes {
     final totals = <String, int>{};
     for (final session in sessions) {
-      totals.update(session.subject, (value) => value + session.actualMinutes,
+      // Resolve subject by id if available so renaming a subject keeps stats
+      // consistent. Legacy sessions without subjectId fall back to the stored
+      // name.
+      final name = optionalSubject(session.subjectId)?.name ?? session.subject;
+      totals.update(name, (value) => value + session.actualMinutes,
           ifAbsent: () => session.actualMinutes);
     }
     return totals;
@@ -335,10 +348,16 @@ class AppController extends ChangeNotifier {
       ),
       DailyQuest(
         id: 'review_mistake',
-        title: 'Review 1 mistake',
-        current: mistakes.any((mistake) =>
-                mistake.reviewedAt != null &&
-                sameDay(mistake.reviewedAt!, DateTime.now()))
+        title: unresolvedMistakeCount == 0
+            ? 'Nothing to review today'
+            : 'Review 1 mistake',
+        // If the user has no unresolved mistakes, treat the quest as
+        // automatically completed so it can be claimed instead of blocking
+        // 100% daily completion forever.
+        current: unresolvedMistakeCount == 0 ||
+                mistakes.any((mistake) =>
+                    mistake.reviewedAt != null &&
+                    sameDay(mistake.reviewedAt!, DateTime.now()))
             ? 1
             : 0,
         target: 1,
@@ -568,9 +587,19 @@ class AppController extends ChangeNotifier {
 
   bool isEquipped(ShopItem item) => equipped[item.category] == item.id;
 
-  Future<bool> feedPet() async {
+  DateTime? lastFedAt;
+
+  bool get canFeedPet {
     if (coins < 10) return false;
+    if (lastFedAt == null) return true;
+    return DateTime.now().difference(lastFedAt!) >= const Duration(hours: 4);
+  }
+
+  Future<bool> feedPet() async {
+    if (!canFeedPet) return false;
     coins -= 10;
+    totalXp += 5;
+    lastFedAt = DateTime.now();
     await _saveAndNotify();
     return true;
   }
@@ -640,6 +669,7 @@ class AppController extends ChangeNotifier {
     claimedQuestKeys.clear();
     claimedWeeklyGoalKeys.clear();
     skippedPlanKeys.clear();
+    lastFedAt = null;
     await _saveAndNotify();
     _runNotification(NotificationService.instance.cancelSessionComplete());
   }
@@ -720,6 +750,7 @@ class AppController extends ChangeNotifier {
         'claimedQuestKeys': claimedQuestKeys.toList(),
         'claimedWeeklyGoalKeys': claimedWeeklyGoalKeys.toList(),
         'skippedPlanKeys': skippedPlanKeys.toList(),
+        'lastFedAt': lastFedAt?.toIso8601String(),
       };
 
   void _readJson(Map<String, dynamic> json) {
@@ -788,6 +819,8 @@ class AppController extends ChangeNotifier {
       ..clear()
       ..addAll(((json['skippedPlanKeys'] as List<dynamic>?) ?? const [])
           .cast<String>());
+    final fed = json['lastFedAt'] as String?;
+    lastFedAt = fed == null ? null : DateTime.tryParse(fed);
   }
 
   void _seedSubjectsIfNeeded() {
