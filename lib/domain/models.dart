@@ -32,11 +32,13 @@ extension PetKindUi on PetKind {
       };
 }
 
-enum ItemCategory { hats, room, backgrounds, effects }
+enum ItemCategory { hats, tops, eyewear, room, backgrounds, effects }
 
 extension ItemCategoryUi on ItemCategory {
   String get label => switch (this) {
         ItemCategory.hats => 'Hats',
+        ItemCategory.tops => 'Tops',
+        ItemCategory.eyewear => 'Eyewear',
         ItemCategory.room => 'Room',
         ItemCategory.backgrounds => 'Backgrounds',
         ItemCategory.effects => 'Effects',
@@ -492,11 +494,26 @@ class ShopItem {
   final String name;
   final ItemCategory category;
   final int price;
+
+  bool get isLegendary => price >= 500;
 }
 
 const shopCatalog = [
+  // Hats
   ShopItem(
       id: 'blue_cap', name: 'Blue Cap', category: ItemCategory.hats, price: 70),
+  ShopItem(
+      id: 'beanie', name: 'Cozy Beanie', category: ItemCategory.hats, price: 85),
+  ShopItem(
+      id: 'party_hat',
+      name: 'Party Hat',
+      category: ItemCategory.hats,
+      price: 95),
+  ShopItem(
+      id: 'sun_hat',
+      name: 'Sun Hat',
+      category: ItemCategory.hats,
+      price: 140),
   ShopItem(
       id: 'grad_cap',
       name: 'Graduation Cap',
@@ -508,34 +525,196 @@ const shopCatalog = [
       category: ItemCategory.hats,
       price: 180),
   ShopItem(
+      id: 'wizard_hat',
+      name: 'Wizard Hat',
+      category: ItemCategory.hats,
+      price: 420),
+  ShopItem(
+      id: 'crown',
+      name: 'Golden Crown',
+      category: ItemCategory.hats,
+      price: 950),
+  // Tops
+  ShopItem(
+      id: 'basic_tee',
+      name: 'Basic Tee',
+      category: ItemCategory.tops,
+      price: 60),
+  ShopItem(
+      id: 'striped_polo',
+      name: 'Striped Polo',
+      category: ItemCategory.tops,
+      price: 120),
+  ShopItem(
+      id: 'study_hoodie',
+      name: 'Study Hoodie',
+      category: ItemCategory.tops,
+      price: 175),
+  ShopItem(
+      id: 'varsity_jacket',
+      name: 'Varsity Jacket',
+      category: ItemCategory.tops,
+      price: 310),
+  ShopItem(
+      id: 'lab_coat',
+      name: 'Lab Coat',
+      category: ItemCategory.tops,
+      price: 285),
+  ShopItem(
+      id: 'hero_cape',
+      name: 'Hero Cape',
+      category: ItemCategory.tops,
+      price: 620),
+  ShopItem(
+      id: 'golden_robe',
+      name: 'Golden Robe',
+      category: ItemCategory.tops,
+      price: 1200),
+  // Eyewear
+  ShopItem(
+      id: 'round_glasses',
+      name: 'Round Glasses',
+      category: ItemCategory.eyewear,
+      price: 75),
+  ShopItem(
+      id: 'sunglasses',
+      name: 'Sunglasses',
+      category: ItemCategory.eyewear,
+      price: 150),
+  ShopItem(
+      id: 'heart_shades',
+      name: 'Heart Shades',
+      category: ItemCategory.eyewear,
+      price: 195),
+  ShopItem(
+      id: 'star_shades',
+      name: 'Star Shades',
+      category: ItemCategory.eyewear,
+      price: 340),
+  ShopItem(
+      id: 'monocle',
+      name: 'Scholar Monocle',
+      category: ItemCategory.eyewear,
+      price: 410),
+  ShopItem(
+      id: 'diamond_glasses',
+      name: 'Diamond Frames',
+      category: ItemCategory.eyewear,
+      price: 880),
+  // Room
+  ShopItem(
       id: 'lamp', name: 'Study Lamp', category: ItemCategory.room, price: 90),
   ShopItem(
+      id: 'rug', name: 'Soft Rug', category: ItemCategory.room, price: 75),
+  ShopItem(
+      id: 'poster',
+      name: 'Motivation Poster',
+      category: ItemCategory.room,
+      price: 85),
+  ShopItem(
       id: 'plant', name: 'Desk Plant', category: ItemCategory.room, price: 110),
+  ShopItem(
+      id: 'calendar',
+      name: 'Wall Calendar',
+      category: ItemCategory.room,
+      price: 95),
   ShopItem(
       id: 'bookshelf',
       name: 'Bookshelf',
       category: ItemCategory.room,
       price: 170),
   ShopItem(
+      id: 'bean_bag',
+      name: 'Bean Bag',
+      category: ItemCategory.room,
+      price: 220),
+  ShopItem(
+      id: 'gaming_chair',
+      name: 'Gaming Chair',
+      category: ItemCategory.room,
+      price: 480),
+  ShopItem(
+      id: 'mini_fridge',
+      name: 'Mini Fridge',
+      category: ItemCategory.room,
+      price: 720),
+  // Backgrounds
+  ShopItem(
       id: 'library',
       name: 'Library',
       category: ItemCategory.backgrounds,
       price: 200),
+  ShopItem(
+      id: 'sunset',
+      name: 'Sunset Desk',
+      category: ItemCategory.backgrounds,
+      price: 185),
+  ShopItem(
+      id: 'forest',
+      name: 'Forest Window',
+      category: ItemCategory.backgrounds,
+      price: 225),
   ShopItem(
       id: 'space',
       name: 'Space Room',
       category: ItemCategory.backgrounds,
       price: 260),
   ShopItem(
+      id: 'neon_city',
+      name: 'Neon City',
+      category: ItemCategory.backgrounds,
+      price: 390),
+  ShopItem(
+      id: 'aurora',
+      name: 'Aurora Sky',
+      category: ItemCategory.backgrounds,
+      price: 540),
+  ShopItem(
+      id: 'royal_hall',
+      name: 'Royal Study Hall',
+      category: ItemCategory.backgrounds,
+      price: 1450),
+  // Effects
+  ShopItem(
       id: 'sparkle',
       name: 'Sparkle Aura',
       category: ItemCategory.effects,
       price: 120),
   ShopItem(
+      id: 'hearts',
+      name: 'Floating Hearts',
+      category: ItemCategory.effects,
+      price: 135),
+  ShopItem(
       id: 'rain',
       name: 'Rain Window',
       category: ItemCategory.effects,
       price: 160),
+  ShopItem(
+      id: 'fireflies',
+      name: 'Fireflies',
+      category: ItemCategory.effects,
+      price: 195),
+  ShopItem(
+      id: 'lightning',
+      name: 'Lightning Spark',
+      category: ItemCategory.effects,
+      price: 275),
+  ShopItem(
+      id: 'halo',
+      name: 'Golden Halo',
+      category: ItemCategory.effects,
+      price: 430),
+  ShopItem(
+      id: 'rainbow',
+      name: 'Rainbow Mist',
+      category: ItemCategory.effects,
+      price: 680),
+  ShopItem(
+      id: 'galaxy',
+      name: 'Galaxy Aura',
+      category: ItemCategory.effects,
+      price: 1050),
 ];
 
 class DailyQuest {
