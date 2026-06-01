@@ -101,11 +101,16 @@ class AppController extends ChangeNotifier {
     if (raw != null) _readJson(jsonDecode(raw) as Map<String, dynamic>);
     _seedSubjectsIfNeeded();
     _linkLegacySessions();
-    _expireStreakIfNeeded();
+    final streakChanged = _expireStreakIfNeeded();
     skippedPlanKeys
         .removeWhere((key) => !key.startsWith('${dayKey(DateTime.now())}:'));
     ready = true;
     notifyListeners();
+    // Expiring/freezing the streak mutates persisted fields. Save immediately
+    // so the result survives even if the user closes the app without acting.
+    if (streakChanged) {
+      await _prefs?.setString(_storageKey, jsonEncode(_toJson()));
+    }
     _runNotification(NotificationService.instance.initialize());
   }
 
@@ -115,8 +120,25 @@ class AppController extends ChangeNotifier {
     await _saveAndNotify();
   }
 
-  Subject subjectById(String id) =>
-      subjects.firstWhere((subject) => subject.id == id);
+  // A stable placeholder returned when a session/task/exam references a subject
+  // that no longer exists (e.g. legacy data). Returning this instead of
+  // throwing keeps the UI from crashing on orphaned references.
+  static final Subject _unknownSubject = Subject(
+    id: '_unknown',
+    name: 'Unknown subject',
+    colorValue: 0xFF8896A8,
+    iconCodePoint: 0x0001,
+    weeklyGoalMinutes: 60,
+    createdAt: DateTime.fromMillisecondsSinceEpoch(0),
+    updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+  );
+
+  Subject subjectById(String id) {
+    for (final subject in subjects) {
+      if (subject.id == id) return subject;
+    }
+    return _unknownSubject;
+  }
 
   Subject? optionalSubject(String? id) {
     if (id == null) return null;
@@ -338,6 +360,53 @@ class AppController extends ChangeNotifier {
     return list;
   }
 
+  List<StudyTask> tasksForExam(String examId) =>
+      tasks.where((task) => task.examId == examId).toList();
+
+  // Share of an exam's generated study-plan tasks that are completed (0..1).
+  // Returns null when no study plan has been generated yet.
+  double? examReadiness(Exam exam) {
+    final planTasks = tasksForExam(exam.id);
+    if (planTasks.isEmpty) return null;
+    final done =
+        planTasks.where((task) => task.status == TaskStatus.done).length;
+    return (done / planTasks.length).clamp(0.0, 1.0);
+  }
+
+  String examReadinessLabel(Exam exam) {
+    final readiness = examReadiness(exam);
+    if (readiness == null) return 'No study plan yet';
+    return '${(readiness * 100).round()}% ready';
+  }
+
+  // Overall answer accuracy logged across this subject's sessions (0..1), or
+  // null if the student never recorded any solved exercises.
+  double? subjectAccuracy(String subjectId) {
+    var total = 0;
+    var correct = 0;
+    for (final session in sessions) {
+      if (session.subjectId != subjectId) continue;
+      final solved = session.exercisesSolved ?? 0;
+      if (solved <= 0) continue;
+      total += solved;
+      correct += (session.correctAnswers ?? 0).clamp(0, solved);
+    }
+    if (total == 0) return null;
+    return correct / total;
+  }
+
+  // Average self-rated confidence (1..5) across this subject's sessions, or
+  // null if none were rated.
+  double? subjectAvgConfidence(String subjectId) {
+    final values = sessions
+        .where((session) =>
+            session.subjectId == subjectId && session.confidenceLevel != null)
+        .map((session) => session.confidenceLevel!)
+        .toList();
+    if (values.isEmpty) return null;
+    return values.reduce((a, b) => a + b) / values.length;
+  }
+
   List<DailyPlanItem> get dailyPlan {
     final now = DateTime.now();
     final plannedTasks = tasks
@@ -534,6 +603,22 @@ class AppController extends ChangeNotifier {
     await _saveAndNotify();
   }
 
+  Future<void> updateExam(
+    Exam exam, {
+    required String title,
+    required DateTime examDate,
+    required List<String> topics,
+    required ExamImportance importance,
+  }) async {
+    if (title.trim().isEmpty) return;
+    exam.title = title.trim();
+    exam.examDate = examDate;
+    exam.topics = topics.where((topic) => topic.trim().isNotEmpty).toList();
+    exam.importance = importance;
+    exam.updatedAt = DateTime.now();
+    await _saveAndNotify();
+  }
+
   Future<bool> deleteExam(Exam exam) async {
     final relatedTasks = tasks.where((task) => task.examId == exam.id).toList();
     if (activeSession != null &&
@@ -604,6 +689,15 @@ class AppController extends ChangeNotifier {
     mistake.isResolved = true;
     mistake.reviewedAt = DateTime.now();
     totalXp += 10;
+    await _saveAndNotify();
+  }
+
+  // Reopen a previously resolved mistake so it resurfaces for review. The XP
+  // already earned for reviewing is kept.
+  Future<void> reopenMistake(Mistake mistake) async {
+    if (!mistake.isResolved) return;
+    mistake.isResolved = false;
+    mistake.reviewedAt = null;
     await _saveAndNotify();
   }
 
@@ -733,13 +827,14 @@ class AppController extends ChangeNotifier {
     lastFocusDate = date;
   }
 
-  void _expireStreakIfNeeded() {
-    if (lastFocusDate == null) return;
+  // Returns true if streak-related state changed (so the caller can persist).
+  bool _expireStreakIfNeeded() {
+    if (lastFocusDate == null) return false;
     _ensureFreezeWeek();
     final daysSince = _dateOnly(DateTime.now())
         .difference(_parseDayKey(lastFocusDate!))
         .inDays;
-    if (daysSince <= 1) return;
+    if (daysSince <= 1) return false;
     // User missed exactly one day: spend a streak freeze if available so the
     // streak survives. Otherwise reset to 0.
     if (daysSince == 2 && streakFreezesUsedThisWeek < 1 && currentStreak > 0) {
@@ -747,9 +842,11 @@ class AppController extends ChangeNotifier {
       final yesterday =
           _dateOnly(DateTime.now()).subtract(const Duration(days: 1));
       lastFocusDate = dayKey(yesterday);
-      return;
+      return true;
     }
+    if (currentStreak == 0) return false;
     currentStreak = 0;
+    return true;
   }
 
   // Parse a dayKey string ("2025-01-15") into a local DateTime at midnight.

@@ -465,12 +465,15 @@ class _AppShellState extends State<AppShell> {
 
   Future<void> quickStart(int minutes) async {
     final plan = widget.controller.dailyPlan;
+    // Link the top planned item so finishing a quick session actually advances
+    // today's plan instead of starting a disconnected timer.
     final subjectId = plan.isNotEmpty
         ? plan.first.subjectId
         : widget.controller.subjects.first.id;
     final started = await widget.controller.startSession(
       minutes: minutes,
       subjectId: subjectId,
+      taskId: plan.isNotEmpty ? plan.first.taskId : null,
       mode: FocusMode.normal,
     );
     if (!started) {
@@ -1140,6 +1143,9 @@ class _UpcomingExamsCard extends StatelessWidget {
               final subject = controller.subjectById(exam.subjectId);
               final timing =
                   exam.daysLeft == 0 ? 'Today' : '${exam.daysLeft} days left';
+              final readiness = controller.examReadiness(exam);
+              final readinessText =
+                  readiness == null ? '' : ' - ${(readiness * 100).round()}% ready';
               return ListTile(
                 contentPadding: EdgeInsets.zero,
                 dense: true,
@@ -1149,7 +1155,7 @@ class _UpcomingExamsCard extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(fontWeight: FontWeight.w800)),
-                subtitle: Text('${subject.name} - $timing',
+                subtitle: Text('${subject.name} - $timing$readinessText',
                     style: const TextStyle(color: Palette.muted)),
                 trailing: Text(exam.importance.label,
                     style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -1585,11 +1591,16 @@ class _ExamsTab extends StatelessWidget {
                       PopupMenuButton<String>(
                         tooltip: 'Exam options',
                         onSelected: (action) async {
-                          if (action == 'delete') {
+                          if (action == 'edit') {
+                            await _showExamEditor(context, controller,
+                                exam: exam);
+                          } else if (action == 'delete') {
                             await _confirmDeleteExam(context, controller, exam);
                           }
                         },
                         itemBuilder: (_) => const [
+                          PopupMenuItem(
+                              value: 'edit', child: Text('Edit exam')),
                           PopupMenuItem(
                               value: 'delete', child: Text('Delete exam')),
                         ],
@@ -1619,6 +1630,39 @@ class _ExamsTab extends StatelessWidget {
                           icon: const Icon(Icons.auto_awesome_outlined),
                           label: const Text('Create study plan')),
                     ] else ...[
+                      const SizedBox(height: 14),
+                      Builder(builder: (context) {
+                        final readiness = controller.examReadiness(exam) ?? 0.0;
+                        final ready = readiness >= 1;
+                        return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(children: [
+                                const Expanded(
+                                    child: Text('Exam readiness',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w900,
+                                            fontSize: 13))),
+                                Text(controller.examReadinessLabel(exam),
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 13,
+                                        color: ready
+                                            ? Palette.mint
+                                            : Color(subject.colorValue))),
+                              ]),
+                              const SizedBox(height: 6),
+                              ClipRRect(
+                                borderRadius: BorderRadius.circular(6),
+                                child: LinearProgressIndicator(
+                                    value: readiness,
+                                    minHeight: 7,
+                                    color: ready
+                                        ? Palette.mint
+                                        : Color(subject.colorValue)),
+                              ),
+                            ]);
+                      }),
                       const SizedBox(height: 14),
                       Text('Study plan (${planTasks.length})',
                           style: const TextStyle(
@@ -1848,6 +1892,8 @@ class _MistakesTabState extends State<_MistakesTab> {
           return Card(
             margin: const EdgeInsets.only(bottom: 9),
             child: ListTile(
+              onTap: () =>
+                  _showMistakeDetail(context, widget.controller, mistake),
               title: Text(mistake.title,
                   style: const TextStyle(fontWeight: FontWeight.w800)),
               subtitle: Text(
@@ -1863,6 +1909,84 @@ class _MistakesTabState extends State<_MistakesTab> {
       ],
     );
   }
+}
+
+Future<void> _showMistakeDetail(
+    BuildContext context, AppController controller, Mistake mistake) async {
+  final subject = controller.subjectById(mistake.subjectId);
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (sheetContext) => Padding(
+      padding: EdgeInsets.fromLTRB(
+          20, 4, 20, 20 + MediaQuery.of(sheetContext).viewInsets.bottom),
+      child: AnimatedBuilder(
+        animation: controller,
+        builder: (context, _) => SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(mistake.title,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w900, fontSize: 20)),
+              const SizedBox(height: 4),
+              Text(
+                  '${subject.name} - ${mistake.mistakeType} - ${_shortDate(mistake.createdAt)}',
+                  style: const TextStyle(color: Palette.muted)),
+              if (mistake.isResolved && mistake.reviewedAt != null) ...[
+                const SizedBox(height: 6),
+                Row(children: [
+                  const Icon(Icons.check_circle, color: Palette.mint, size: 16),
+                  const SizedBox(width: 6),
+                  Text('Reviewed ${_shortDate(mistake.reviewedAt!)}',
+                      style: const TextStyle(
+                          color: Palette.mint, fontWeight: FontWeight.w700)),
+                ]),
+              ],
+              if (mistake.description.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text('What happened',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                        color: Palette.muted)),
+                const SizedBox(height: 4),
+                Text(mistake.description, style: const TextStyle(height: 1.4)),
+              ],
+              if (mistake.correction.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text('Correct approach',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                        fontSize: 12,
+                        color: Palette.muted)),
+                const SizedBox(height: 4),
+                Text(mistake.correction, style: const TextStyle(height: 1.4)),
+              ],
+              const SizedBox(height: 22),
+              if (mistake.isResolved)
+                OutlinedButton.icon(
+                  onPressed: () => controller.reopenMistake(mistake),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Reopen for review'),
+                )
+              else
+                FilledButton.icon(
+                  onPressed: () async {
+                    await controller.reviewMistake(mistake);
+                    if (sheetContext.mounted) Navigator.pop(sheetContext);
+                  },
+                  icon: const Icon(Icons.check_rounded),
+                  label: const Text('Mark reviewed  (+10 XP)'),
+                ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 class _PlanTabHeader extends StatelessWidget {
@@ -2091,6 +2215,29 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
                   ]),
             ),
           ),
+          if (controller.subjectAccuracy(subject.id) != null ||
+              controller.subjectAvgConfidence(subject.id) != null) ...[
+            const SizedBox(height: 12),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(children: [
+                  if (controller.subjectAccuracy(subject.id) != null)
+                    _PetMetric(
+                        label: 'Accuracy',
+                        value:
+                            '${(controller.subjectAccuracy(subject.id)! * 100).round()}%'),
+                  if (controller.subjectAvgConfidence(subject.id) != null)
+                    _PetMetric(
+                        label: 'Avg confidence',
+                        value:
+                            '${controller.subjectAvgConfidence(subject.id)!.toStringAsFixed(1)} / 5'),
+                  _PetMetric(
+                      label: 'This week', value: formatMinutes(minutes)),
+                ]),
+              ),
+            ),
+          ],
           const SizedBox(height: 15),
           FilledButton.icon(
               onPressed: () async {
@@ -2129,6 +2276,7 @@ class _SubjectDetailScreenState extends State<SubjectDetailScreen> {
           const _SectionHeader(title: 'Mistake log'),
           const SizedBox(height: 8),
           ...mistakes.map((mistake) => ListTile(
+              onTap: () => _showMistakeDetail(context, controller, mistake),
               title: Text(mistake.title),
               subtitle: Text(mistake.mistakeType),
               trailing: mistake.isResolved
@@ -2376,18 +2524,18 @@ Future<void> _confirmDeleteTask(
   }
 }
 
-Future<void> _showExamEditor(
-    BuildContext context, AppController controller) async {
-  final title = TextEditingController();
-  final topics = TextEditingController();
-  var subjectId = controller.subjects.first.id;
-  var date = DateTime.now().add(const Duration(days: 7));
-  var importance = ExamImportance.important;
+Future<void> _showExamEditor(BuildContext context, AppController controller,
+    {Exam? exam}) async {
+  final title = TextEditingController(text: exam?.title);
+  final topics = TextEditingController(text: exam?.topics.join(', '));
+  var subjectId = exam?.subjectId ?? controller.subjects.first.id;
+  var date = exam?.examDate ?? DateTime.now().add(const Duration(days: 7));
+  var importance = exam?.importance ?? ExamImportance.important;
   await showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(builder: (context, setLocal) {
             return AlertDialog(
-              title: const Text('Add exam'),
+              title: Text(exam == null ? 'Add exam' : 'Edit exam'),
               content: SingleChildScrollView(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   DropdownButtonFormField<String>(
@@ -2397,7 +2545,11 @@ Future<void> _showExamEditor(
                           .map((item) => DropdownMenuItem(
                               value: item.id, child: Text(item.name)))
                           .toList(),
-                      onChanged: (value) => setLocal(() => subjectId = value!)),
+                      // Subject is fixed once an exam exists so generated study
+                      // tasks stay consistent with their subject.
+                      onChanged: exam != null
+                          ? null
+                          : (value) => setLocal(() => subjectId = value!)),
                   TextField(
                       controller: title,
                       decoration:
@@ -2444,15 +2596,24 @@ Future<void> _showExamEditor(
                                 content: Text('Enter an exam title first.')));
                         return;
                       }
-                      await controller.addExam(
-                          subjectId: subjectId,
-                          title: title.text,
-                          examDate: date,
-                          topics: topics.text
-                              .split(',')
-                              .map((text) => text.trim())
-                              .toList(),
-                          importance: importance);
+                      final parsedTopics = topics.text
+                          .split(',')
+                          .map((text) => text.trim())
+                          .toList();
+                      if (exam == null) {
+                        await controller.addExam(
+                            subjectId: subjectId,
+                            title: title.text,
+                            examDate: date,
+                            topics: parsedTopics,
+                            importance: importance);
+                      } else {
+                        await controller.updateExam(exam,
+                            title: title.text,
+                            examDate: date,
+                            topics: parsedTopics,
+                            importance: importance);
+                      }
                       if (context.mounted) Navigator.pop(context);
                     },
                     child: const Text('Save'))
@@ -3218,8 +3379,12 @@ class _SessionCompleteViewState extends State<SessionCompleteView> {
                     _ResultStepper(
                         label: 'Exercises solved',
                         value: exercises,
-                        onChanged: (value) =>
-                            setState(() => exercises = value)),
+                        onChanged: (value) => setState(() {
+                              exercises = value;
+                              // Keep correct answers within the new total so we
+                              // never store correct > exercises.
+                              if (correct > exercises) correct = exercises;
+                            })),
                     _ResultStepper(
                         label: 'Correct answers',
                         value: correct,
@@ -3397,8 +3562,8 @@ class PetScreen extends StatelessWidget {
                     value:
                         controller.todaySessionCount > 0 ? 'Proud' : 'Happy'),
                 _PetMetric(
-                    label: 'Knowledge',
-                    value: '${controller.totalMinutes ~/ 10}'),
+                    label: 'Focus time',
+                    value: formatMinutes(controller.totalMinutes)),
                 _PetMetric(
                     label: 'Sessions', value: '${controller.sessions.length}'),
               ],
@@ -3410,20 +3575,19 @@ class PetScreen extends StatelessWidget {
           children: [
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: () async {
-                  final wasReady = controller.canFeedPet;
-                  final fed = await controller.feedPet();
-                  if (!context.mounted) return;
-                  final message = fed
-                      ? '${controller.petName} enjoyed a snack. -10 coins, +5 XP'
-                      : !wasReady && controller.coins >= 10
-                          ? '${controller.petName} is full. Try again later.'
-                          : 'You need 10 coins to feed ${controller.petName}.';
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(SnackBar(content: Text(message)));
-                },
+                onPressed: controller.canFeedPet
+                    ? () async {
+                        final fed = await controller.feedPet();
+                        if (!context.mounted) return;
+                        final message = fed
+                            ? '${controller.petName} enjoyed a snack. -10 coins, +5 XP'
+                            : 'Could not feed ${controller.petName} right now.';
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(SnackBar(content: Text(message)));
+                      }
+                    : null,
                 icon: const Icon(Icons.restaurant_outlined),
-                label: const Text('Feed'),
+                label: Text(controller.coins < 10 ? 'Feed (10 coins)' : 'Feed'),
               ),
             ),
             const SizedBox(width: 10),
@@ -3435,6 +3599,11 @@ class PetScreen extends StatelessWidget {
             ),
           ],
         ),
+        if (!controller.canFeedPet && controller.coins >= 10) ...[
+          const SizedBox(height: 6),
+          Text('${controller.petName} is full — you can feed again later.',
+              style: const TextStyle(color: Palette.muted, fontSize: 12)),
+        ],
         const SizedBox(height: 10),
         FilledButton.tonalIcon(
           onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
