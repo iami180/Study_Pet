@@ -525,7 +525,7 @@ class HomeScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Good afternoon, ${controller.userName}!',
+                  Text('${_greeting()}, ${controller.userName}!',
                       style: Theme.of(context)
                           .textTheme
                           .headlineSmall
@@ -2339,7 +2339,18 @@ Future<void> showAddMistake(BuildContext context, AppController controller,
   correction.dispose();
 }
 
-String _shortDate(DateTime date) => '${date.month}/${date.day}';
+String _shortDate(DateTime date) {
+  final now = DateTime.now();
+  final y = date.year != now.year ? '/${date.year}' : '';
+  return '${date.month.toString().padLeft(2, '0')}/${date.day.toString().padLeft(2, '0')}$y';
+}
+
+String _greeting() {
+  final hour = DateTime.now().hour;
+  if (hour < 12) return 'Good morning';
+  if (hour < 17) return 'Good afternoon';
+  return 'Good evening';
+}
 
 IconData _subjectIcon(Subject subject) {
   if (subject.iconCodePoint == Icons.calculate_outlined.codePoint) {
@@ -2484,7 +2495,7 @@ class _FocusSetupScreenState extends State<FocusSetupScreen> {
         const SizedBox(height: 25),
         const _SectionHeader(title: 'Mode'),
         const SizedBox(height: 10),
-        ...[FocusMode.normal, FocusMode.deep].map(
+        ...FocusMode.values.map(
           (value) => Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: _ModeTile(
@@ -3861,7 +3872,7 @@ class _ShopScreenState extends State<ShopScreen> {
         children: [
           _ShopPreviewCard(controller: widget.controller),
           const SizedBox(height: 22),
-          const _SectionHeader(title: 'Customize Lumi'),
+          _SectionHeader(title: 'Customize ${widget.controller.petName}'),
           const SizedBox(height: 12),
           Row(
             children: ItemCategory.values
@@ -4028,15 +4039,16 @@ class _ShopCard extends StatelessWidget {
               ),
             ),
             if (equipped)
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                    color: Palette.mint.withValues(alpha: .14),
-                    borderRadius: BorderRadius.circular(12)),
-                child: const Text('Equipped',
-                    style: TextStyle(
-                        color: Palette.mint, fontWeight: FontWeight.w800)),
+              SizedBox(
+                width: 92,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Palette.mint,
+                    side: const BorderSide(color: Palette.mint),
+                  ),
+                  onPressed: () => controller.unequip(item),
+                  child: const Text('Unequip'),
+                ),
               )
             else
               SizedBox(
@@ -4147,6 +4159,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 26),
         children: [
+          const _SettingsHeader('Profile'),
+          ListTile(
+            leading: const Icon(Icons.person_outline),
+            title: const Text('Your name'),
+            trailing: Text(controller.userName,
+                style: const TextStyle(fontWeight: FontWeight.w800)),
+            onTap: () => _editUserName(context),
+          ),
           const _SettingsHeader('Preferences'),
           SwitchListTile(
             title: const Text('Notifications'),
@@ -4217,6 +4237,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _editUserName(BuildContext context) async {
+    final input = TextEditingController(text: controller.userName);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Your name'),
+        content: TextField(
+          controller: input,
+          autofocus: true,
+          maxLength: 20,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(hintText: 'e.g. Alex'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, input.text.trim()),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+    input.dispose();
+    if (name != null && name.isNotEmpty) {
+      await controller.updateUserName(name);
+    }
   }
 
   Future<void> _confirmReset(BuildContext context) async {

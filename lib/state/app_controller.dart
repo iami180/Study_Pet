@@ -559,6 +559,13 @@ class AppController extends ChangeNotifier {
     await _saveAndNotify();
   }
 
+  Future<void> unequip(ShopItem item) async {
+    if (equipped[item.category] == item.id) {
+      equipped[item.category] = null;
+      await _saveAndNotify();
+    }
+  }
+
   bool isEquipped(ShopItem item) => equipped[item.category] == item.id;
 
   Future<bool> feedPet() async {
@@ -571,6 +578,12 @@ class AppController extends ChangeNotifier {
   Future<void> renamePet(String name) async {
     if (name.trim().isEmpty) return;
     petName = name.trim();
+    await _saveAndNotify();
+  }
+
+  Future<void> updateUserName(String name) async {
+    if (name.trim().isEmpty) return;
+    userName = name.trim();
     await _saveAndNotify();
   }
 
@@ -637,7 +650,7 @@ class AppController extends ChangeNotifier {
     if (lastFocusDate == null) {
       currentStreak = 1;
     } else {
-      final previous = DateTime.parse(lastFocusDate!);
+      final previous = _parseDayKey(lastFocusDate!);
       final days = _dateOnly(completion).difference(previous).inDays;
       currentStreak = days == 1 ? currentStreak + 1 : 1;
     }
@@ -648,11 +661,17 @@ class AppController extends ChangeNotifier {
   void _expireStreakIfNeeded() {
     if (lastFocusDate == null) return;
     if (_dateOnly(DateTime.now())
-            .difference(DateTime.parse(lastFocusDate!))
+            .difference(_parseDayKey(lastFocusDate!))
             .inDays >
         1) {
       currentStreak = 0;
     }
+  }
+
+  // Parse a dayKey string ("2025-01-15") into a local DateTime at midnight.
+  DateTime _parseDayKey(String key) {
+    final parts = key.split('-');
+    return DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
   }
 
   DateTime _dateOnly(DateTime date) =>
@@ -774,12 +793,14 @@ class AppController extends ChangeNotifier {
   void _seedSubjectsIfNeeded() {
     if (subjects.isNotEmpty) return;
     final now = DateTime.now();
+    // iconCodePoint values: 0xe80c=calculate, 0xe865=language, 0xe86f=code,
+    // 0xe80f=science. Any other value renders as book_outlined (default).
     const values = [
       ('math', 'Math', 0xFF4E68D8, 0xe80c, 120),
       ('english', 'English', 0xFF47C3A4, 0xe865, 90),
       ('programming', 'Programming', 0xFFFF8068, 0xe86f, 150),
       ('physics', 'Physics', 0xFFFFC24C, 0xe80f, 90),
-      ('history', 'History', 0xFF8896A8, 0xe865, 60),
+      ('history', 'History', 0xFF8896A8, 0x0001, 60),
     ];
     for (final value in values) {
       subjects.add(Subject(
