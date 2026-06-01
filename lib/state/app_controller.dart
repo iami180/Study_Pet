@@ -19,6 +19,9 @@ class AppController extends ChangeNotifier {
   bool vibrationEnabled = true;
   int reminderHour = 18;
   int reminderMinute = 0;
+  int dailyGoalMinutes = 60;
+  int streakFreezesUsedThisWeek = 0;
+  String? freezesWeekKey;
   String userName = 'Marci';
   String petName = 'Lumi';
   PetKind petKind = PetKind.robot;
@@ -51,6 +54,46 @@ class AppController extends ChangeNotifier {
   bool get hasActiveSession => activeSession != null;
   int get unresolvedMistakeCount =>
       mistakes.where((mistake) => !mistake.isResolved).length;
+
+  double get todayGoalProgress =>
+      dailyGoalMinutes == 0 ? 1 : (todayMinutes / dailyGoalMinutes).clamp(0.0, 1.0);
+  bool get reachedDailyGoal => todayMinutes >= dailyGoalMinutes;
+
+  bool get hasFreezeAvailable {
+    _ensureFreezeWeek();
+    return streakFreezesUsedThisWeek < 1;
+  }
+
+  void _ensureFreezeWeek() {
+    final key = dayKey(_mondayOf(DateTime.now()));
+    if (freezesWeekKey != key) {
+      freezesWeekKey = key;
+      streakFreezesUsedThisWeek = 0;
+    }
+  }
+
+  // Returns the last 30 calendar days of minutes (oldest first, today last).
+  List<int> get last30DaysMinutes {
+    final today = _dateOnly(DateTime.now());
+    return List.generate(30, (index) {
+      final day = today.subtract(Duration(days: 29 - index));
+      return sessions
+          .where((session) => sameDay(session.finishedAt, day))
+          .fold(0, (sum, session) => sum + session.actualMinutes);
+    });
+  }
+
+  List<StudyTask> get inProgressTasks => tasks
+      .where((task) =>
+          task.status == TaskStatus.inProgress &&
+          task.id != activeSession?.taskId)
+      .toList()
+    ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+  Future<void> setDailyGoal(int minutes) async {
+    dailyGoalMinutes = minutes.clamp(15, 480);
+    await _saveAndNotify();
+  }
 
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
@@ -670,6 +713,8 @@ class AppController extends ChangeNotifier {
     claimedWeeklyGoalKeys.clear();
     skippedPlanKeys.clear();
     lastFedAt = null;
+    streakFreezesUsedThisWeek = 0;
+    freezesWeekKey = null;
     await _saveAndNotify();
     _runNotification(NotificationService.instance.cancelSessionComplete());
   }
@@ -690,12 +735,21 @@ class AppController extends ChangeNotifier {
 
   void _expireStreakIfNeeded() {
     if (lastFocusDate == null) return;
-    if (_dateOnly(DateTime.now())
-            .difference(_parseDayKey(lastFocusDate!))
-            .inDays >
-        1) {
-      currentStreak = 0;
+    _ensureFreezeWeek();
+    final daysSince = _dateOnly(DateTime.now())
+        .difference(_parseDayKey(lastFocusDate!))
+        .inDays;
+    if (daysSince <= 1) return;
+    // User missed exactly one day: spend a streak freeze if available so the
+    // streak survives. Otherwise reset to 0.
+    if (daysSince == 2 && streakFreezesUsedThisWeek < 1 && currentStreak > 0) {
+      streakFreezesUsedThisWeek += 1;
+      final yesterday =
+          _dateOnly(DateTime.now()).subtract(const Duration(days: 1));
+      lastFocusDate = dayKey(yesterday);
+      return;
     }
+    currentStreak = 0;
   }
 
   // Parse a dayKey string ("2025-01-15") into a local DateTime at midnight.
@@ -751,6 +805,9 @@ class AppController extends ChangeNotifier {
         'claimedWeeklyGoalKeys': claimedWeeklyGoalKeys.toList(),
         'skippedPlanKeys': skippedPlanKeys.toList(),
         'lastFedAt': lastFedAt?.toIso8601String(),
+        'dailyGoalMinutes': dailyGoalMinutes,
+        'streakFreezesUsedThisWeek': streakFreezesUsedThisWeek,
+        'freezesWeekKey': freezesWeekKey,
       };
 
   void _readJson(Map<String, dynamic> json) {
@@ -821,6 +878,10 @@ class AppController extends ChangeNotifier {
           .cast<String>());
     final fed = json['lastFedAt'] as String?;
     lastFedAt = fed == null ? null : DateTime.tryParse(fed);
+    dailyGoalMinutes = (json['dailyGoalMinutes'] as int?) ?? 60;
+    streakFreezesUsedThisWeek =
+        (json['streakFreezesUsedThisWeek'] as int?) ?? 0;
+    freezesWeekKey = json['freezesWeekKey'] as String?;
   }
 
   void _seedSubjectsIfNeeded() {

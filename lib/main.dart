@@ -571,6 +571,15 @@ class HomeScreen extends StatelessWidget {
                 icon: Icons.local_fire_department_rounded,
                 value: '${controller.currentStreak}',
                 color: Palette.coral),
+            if (controller.hasFreezeAvailable && controller.currentStreak > 0)
+              Padding(
+                padding: const EdgeInsets.only(left: 6),
+                child: Tooltip(
+                  message: 'Streak freeze available this week',
+                  child: Icon(Icons.ac_unit_rounded,
+                      color: Colors.lightBlue.shade300, size: 18),
+                ),
+              ),
             IconButton(
               tooltip: 'Settings',
               onPressed: () => Navigator.of(context).push(MaterialPageRoute(
@@ -595,6 +604,11 @@ class HomeScreen extends StatelessWidget {
         const SizedBox(height: 10),
         _DailyPlanCard(
             controller: controller, onStartPlanItem: onStartPlanItem),
+        if (!controller.hasActiveSession &&
+            controller.inProgressTasks.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          _ContinueTasksCard(controller: controller),
+        ],
         if (controller.upcomingExams.isNotEmpty) ...[
           const SizedBox(height: 18),
           _UpcomingExamsCard(
@@ -661,29 +675,72 @@ class _SummaryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final progress = controller.todayGoalProgress;
+    final reached = controller.reachedDailyGoal;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('TODAY',
+            Row(children: [
+              const Expanded(
+                child: Text('TODAY',
+                    style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        color: Palette.muted)),
+              ),
+              Text(
+                reached
+                    ? 'Goal reached!'
+                    : '${controller.todayMinutes} / ${controller.dailyGoalMinutes} min',
                 style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w900,
-                    color: Palette.muted)),
-            const SizedBox(height: 15),
-            Row(
-              children: [
-                _SummaryMetric(
-                    value: formatMinutes(controller.todayMinutes),
-                    label: 'Focus time'),
-                _SummaryMetric(
-                    value: '${controller.todaySessionCount}',
-                    label: 'Sessions'),
-                _SummaryMetric(value: '${controller.coins}', label: 'Coins'),
-              ],
-            ),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w900,
+                  color: reached ? Palette.mint : Palette.muted,
+                ),
+              ),
+            ]),
+            const SizedBox(height: 12),
+            Row(children: [
+              SizedBox(
+                width: 56,
+                height: 56,
+                child: Stack(alignment: Alignment.center, children: [
+                  SizedBox.expand(
+                    child: CircularProgressIndicator(
+                      value: progress,
+                      strokeWidth: 6,
+                      strokeCap: StrokeCap.round,
+                      color: reached ? Palette.mint : null,
+                      backgroundColor: Theme.of(context)
+                          .colorScheme
+                          .outlineVariant
+                          .withValues(alpha: .4),
+                    ),
+                  ),
+                  Text('${(progress * 100).round()}%',
+                      style: const TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w900)),
+                ]),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Row(
+                  children: [
+                    _SummaryMetric(
+                        value: formatMinutes(controller.todayMinutes),
+                        label: 'Focus time'),
+                    _SummaryMetric(
+                        value: '${controller.todaySessionCount}',
+                        label: 'Sessions'),
+                    _SummaryMetric(
+                        value: '${controller.coins}', label: 'Coins'),
+                  ],
+                ),
+              ),
+            ]),
           ],
         ),
       ),
@@ -1008,6 +1065,60 @@ Future<void> _showTodayPlanEditor(
   title.dispose();
 }
 
+class _ContinueTasksCard extends StatelessWidget {
+  const _ContinueTasksCard({required this.controller});
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final tasks = controller.inProgressTasks.take(3).toList();
+    return Card(
+      color: Palette.mint.withValues(alpha: .1),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 12, 8),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('PICK UP WHERE YOU LEFT OFF',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: Palette.muted)),
+          const SizedBox(height: 4),
+          ...tasks.map((task) {
+            final subject = controller.subjectById(task.subjectId);
+            return ListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              leading: Icon(Icons.play_circle_outline,
+                  color: Color(subject.colorValue)),
+              title: Text(task.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontWeight: FontWeight.w800)),
+              subtitle: Text('${subject.name} - ${task.estimatedMinutes} min',
+                  style: const TextStyle(color: Palette.muted)),
+              trailing: TextButton(
+                onPressed: () async {
+                  await controller.startSession(
+                    minutes: task.estimatedMinutes,
+                    subjectId: task.subjectId,
+                    taskId: task.id,
+                    mode: FocusMode.normal,
+                  );
+                  if (!context.mounted) return;
+                  await Navigator.of(context).push(MaterialPageRoute<bool>(
+                      builder: (_) =>
+                          ActiveFocusScreen(controller: controller)));
+                },
+                child: const Text('Continue'),
+              ),
+            );
+          }),
+        ]),
+      ),
+    );
+  }
+}
+
 class _UpcomingExamsCard extends StatelessWidget {
   const _UpcomingExamsCard({required this.controller, required this.exams});
   final AppController controller;
@@ -1148,12 +1259,31 @@ class _TasksTab extends StatefulWidget {
 
 class _TasksTabState extends State<_TasksTab> {
   bool showAllDone = false;
+  final searchController = TextEditingController();
+  String query = '';
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
+  }
+
+  bool _matches(StudyTask task) {
+    if (query.isEmpty) return true;
+    final q = query.toLowerCase();
+    if (task.title.toLowerCase().contains(q)) return true;
+    if (task.description.toLowerCase().contains(q)) return true;
+    final subject = widget.controller.optionalSubject(task.subjectId);
+    if (subject != null && subject.name.toLowerCase().contains(q)) return true;
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
+    final showSearch = controller.tasks.length >= 5;
     final open = controller.tasks
-        .where((task) => task.status != TaskStatus.done)
+        .where((task) => task.status != TaskStatus.done && _matches(task))
         .toList()
       ..sort((a, b) {
         final priority = b.priority.index.compareTo(a.priority.index);
@@ -1162,7 +1292,7 @@ class _TasksTabState extends State<_TasksTab> {
             .compareTo(b.dueDate ?? DateTime(2100));
       });
     final done = controller.tasks
-        .where((task) => task.status == TaskStatus.done)
+        .where((task) => task.status == TaskStatus.done && _matches(task))
         .toList()
       ..sort((a, b) => (b.completedAt ?? b.createdAt)
           .compareTo(a.completedAt ?? a.createdAt));
@@ -1179,6 +1309,27 @@ class _TasksTabState extends State<_TasksTab> {
           icon: Icons.add_task_rounded,
           onPressed: () => _showTaskEditor(context, controller),
         ),
+        if (showSearch) ...[
+          const SizedBox(height: 12),
+          TextField(
+            controller: searchController,
+            decoration: InputDecoration(
+              hintText: 'Search tasks',
+              prefixIcon: const Icon(Icons.search),
+              isDense: true,
+              suffixIcon: query.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        searchController.clear();
+                        setState(() => query = '');
+                      },
+                    ),
+            ),
+            onChanged: (value) => setState(() => query = value.trim()),
+          ),
+        ],
         const SizedBox(height: 14),
         if (open.isEmpty)
           _EmptyPlanMessage(
@@ -3643,6 +3794,22 @@ class _StatsScreenState extends State<StatsScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                const Text('Last 30 days',
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w900)),
+                const SizedBox(height: 14),
+                _ActivityHeatmap(values: controller.last30DaysMinutes),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
                 const Text('By subject',
                     style:
                         TextStyle(fontSize: 16, fontWeight: FontWeight.w900)),
@@ -3838,6 +4005,81 @@ class _MetricPanel extends StatelessWidget {
           ),
         ),
       );
+}
+
+class _ActivityHeatmap extends StatelessWidget {
+  const _ActivityHeatmap({required this.values});
+  final List<int> values;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxValue = math.max(1, values.fold(0, math.max));
+    final primary = Theme.of(context).colorScheme.primary;
+    return LayoutBuilder(builder: (context, constraints) {
+      const cols = 10;
+      const rows = 3;
+      const gap = 4.0;
+      final cellSize = (constraints.maxWidth - gap * (cols - 1)) / cols;
+      final today = DateTime.now();
+      return SizedBox(
+        height: rows * cellSize + (rows - 1) * gap + 22,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: gap,
+              runSpacing: gap,
+              children: List.generate(values.length, (index) {
+                final minutes = values[index];
+                final intensity = minutes == 0 ? 0.0 : (minutes / maxValue);
+                final day = today.subtract(Duration(days: 29 - index));
+                final isToday = sameDay(day, today);
+                return Tooltip(
+                  message: '${_shortDate(day)}: ${formatMinutes(minutes)}',
+                  child: Container(
+                    width: cellSize,
+                    height: cellSize,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(4),
+                      color: minutes == 0
+                          ? Theme.of(context)
+                              .colorScheme
+                              .outlineVariant
+                              .withValues(alpha: .3)
+                          : primary.withValues(alpha: 0.2 + intensity * 0.7),
+                      border: isToday
+                          ? Border.all(color: primary, width: 1.5)
+                          : null,
+                    ),
+                  ),
+                );
+              }),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              const Text('Less',
+                  style: TextStyle(fontSize: 10, color: Palette.muted)),
+              const SizedBox(width: 6),
+              ...List.generate(4, (i) => Padding(
+                    padding: const EdgeInsets.only(right: 3),
+                    child: Container(
+                      width: 10,
+                      height: 10,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(2),
+                        color: primary.withValues(alpha: 0.2 + i * 0.23),
+                      ),
+                    ),
+                  )),
+              const SizedBox(width: 3),
+              const Text('More',
+                  style: TextStyle(fontSize: 10, color: Palette.muted)),
+            ]),
+          ],
+        ),
+      );
+    });
+  }
 }
 
 class WeeklyChart extends StatelessWidget {
@@ -4234,6 +4476,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: const TextStyle(fontWeight: FontWeight.w800)),
             onTap: () => _editUserName(context),
           ),
+          const _SettingsHeader('Goals'),
+          ListTile(
+            leading: const Icon(Icons.flag_outlined),
+            title: const Text('Daily focus goal'),
+            subtitle: const Text('How many minutes to focus each day'),
+            trailing: Text('${controller.dailyGoalMinutes} min',
+                style: const TextStyle(fontWeight: FontWeight.w800)),
+            onTap: () => _editDailyGoal(context),
+          ),
           const _SettingsHeader('Preferences'),
           SwitchListTile(
             title: const Text('Notifications'),
@@ -4304,6 +4555,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _editDailyGoal(BuildContext context) async {
+    var minutes = controller.dailyGoalMinutes;
+    final result = await showDialog<int>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setLocal) => AlertDialog(
+          title: const Text('Daily focus goal'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Aim for this many focus minutes every day.',
+                style: TextStyle(color: Palette.muted)),
+            const SizedBox(height: 16),
+            Row(children: [
+              IconButton(
+                  onPressed: () =>
+                      setLocal(() => minutes = math.max(15, minutes - 15)),
+                  icon: const Icon(Icons.remove_circle_outline)),
+              Expanded(
+                  child: Text('$minutes min',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontSize: 22, fontWeight: FontWeight.w900))),
+              IconButton(
+                  onPressed: () =>
+                      setLocal(() => minutes = math.min(480, minutes + 15)),
+                  icon: const Icon(Icons.add_circle_outline)),
+            ]),
+          ]),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel')),
+            FilledButton(
+                onPressed: () => Navigator.pop(context, minutes),
+                child: const Text('Save')),
+          ],
+        ),
+      ),
+    );
+    if (result != null) await controller.setDailyGoal(result);
   }
 
   Future<void> _editUserName(BuildContext context) async {
